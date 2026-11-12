@@ -6,31 +6,37 @@ using namespace bax;
 
 namespace
 {
-    constexpr int kWidth = BaxPanel::kBaseWidth, kHeight = BaxPanel::kBaseHeight;
-    constexpr int kTopStripH = 34, kBottomBarY = 414;
-    constexpr float kStripY = 40.0f, kStripH = 250.0f, kStripW = 368.0f;
-    constexpr float kRowY = 296.0f, kRowH = 112.0f;
-}
+    constexpr int kWidth = BaxPanel::kBaseWidth;
+    constexpr float kTopBarH = 24.0f, kRackH = 126.0f, kRackGap = 4.0f;
+    constexpr float kFaceX = 72.0f;                    // faceplate inside the rack ears
+    constexpr float kKnobRowY = 64.0f;                 // knob centre, relative to the rack
+    constexpr float kSelectorD = 50.0f, kLevelD = 76.0f;
 
-//==============================================================================
-EngageButton::EngageButton (RangedAudioParameter& p)
-    : TextButton ("Engage"),
-      attachment (p, [this] (float v)
-      {
-          const bool on = v < 0.5f;
-          setToggleState (on, dontSendNotification);
-          setButtonText (on ? "Engaged" : "Off");
-      })
-{
-    setClickingTogglesState (false);
-    onClick = [this]
+    // knob columns (x centres), as on the hardware layout
+    constexpr float xCutLow = 220.0f, xShelfLow = 322.0f;
+    constexpr float xLowL = 428.0f, xLowR = 536.0f, xHighL = 656.0f, xHighR = 764.0f;
+    constexpr float xShelfHigh = 872.0f, xCutHigh = 978.0f, xEngage = 1070.0f;
+
+    String scaleText (FreqKind kind, int d)
     {
-        attachment.setValueAsCompleteGesture (getToggleState() ? 1.0f : 0.0f);
-    };
-    attachment.sendInitialUpdate();
+        const double hz = freqTable (kind)[d];
+        if (hz <= 0.0) return "OUT";
+        if (kind == FreqKind::HS || kind == FreqKind::LP)
+            return String (hz / 1000.0, std::abs (hz / 1000.0 - std::round (hz / 1000.0)) < 1.0e-6 ? 0 : 1);
+        return String (roundToInt (hz));
+    }
 }
 
-EngageButton::~EngageButton() { onClick = nullptr; }
+float BaxPanel::rackY (int index)
+{
+    return kTopBarH + kRackGap + (float) index * (kRackH + kRackGap);
+}
+
+int BaxPanel::baseHeightFor (View v)
+{
+    const int racks = v == View::Classic ? 1 : (v == View::ClassicExp ? 2 : 3);
+    return (int) (rackY (racks) - kRackGap + kRackGap);
+}
 
 //==============================================================================
 BaxPanel::BaxPanel (BaxAudioProcessor& p) : processor (p)
@@ -39,67 +45,87 @@ BaxPanel::BaxPanel (BaxAudioProcessor& p) : processor (p)
     setOpaque (true);
     createBackground();
 
+    auto& apvts = processor.apvts;
     for (int c = 0; c < 2; ++c)
         setupStrip (strips[c], c);
 
-    auto& apvts = processor.apvts;
-
-    // Output
+    // bottom rack
     outputKnob.bipolar = true;
     outputKnob.coarseStep = 0.5;
     outputKnob.fineStep = 0.1;
     knobAttachments.push_back (std::make_unique<KnobAttachment> (*apvts.getParameter (ParamIDs::output), outputKnob));
     addAndMakeVisible (outputKnob);
-    addAndMakeVisible (meterL);
-    addAndMakeVisible (meterR);
 
-    const std::tuple<TextButton*, const char*, const char*> buttons[] =
+    linkLed = std::make_unique<LedButton> (*apvts.getParameter (ParamIDs::link), 1.0f,
+        "Stereo link: in Classic views the left and right levels move together; in Dual Mono the right channel follows the left");
+    midSideLed = std::make_unique<LedButton> (*apvts.getParameter (ParamIDs::midSide), 1.0f,
+        "Mid/Side: the two channels work on Mid and Side instead of Left and Right");
+    addAndMakeVisible (*linkLed);
+    addAndMakeVisible (*midSideLed);
+
+    // top bar
+    bypassButton = std::make_unique<PillToggle> (*apvts.getParameter (ParamIDs::bypass), "Bypass",
+                                                 "Bypass the whole plugin (true bypass, 200 ms crossfade, latency kept)");
+    addAndMakeVisible (*bypassButton);
+    monitor = std::make_unique<MonitorSelector> (*apvts.getParameter (ParamIDs::monitor));
+    addAndMakeVisible (*monitor);
+
+    sizeMenu.setTooltip ("Window size (or drag the bottom-right corner)");
+    sizeMenu.buildMenu = [this] (PopupMenu& m)
     {
-        { &midSideButton, ParamIDs::midSide, "Mid/Side: the two EQ channels work on Mid and Side instead of Left and Right" },
-        { &linkButton,    ParamIDs::link,    "Stereo link (Dual Mono view): the second channel follows the first channel's controls" },
+        for (int pct : { 50, 75, 100, 125, 150, 200 })
+            m.addItem (String (pct) + " %", [this, pct] { if (onScaleRequested) onScaleRequested ((float) pct / 100.0f); });
     };
-    for (auto& [button, id, tip] : buttons)
+
+    auto choiceMenu = [&apvts] (const char* id)
     {
-        button->setClickingTogglesState (true);
-        button->setTooltip (tip);
-        buttonAttachments.push_back (std::make_unique<ButtonAttachment> (apvts, id, *button));
-        addAndMakeVisible (*button);
+        return [&apvts, id] (PopupMenu& m)
+        {
+            auto* param = dynamic_cast<AudioParameterChoice*> (apvts.getParameter (id));
+            for (int i = 0; i < param->choices.size(); ++i)
+                m.addItem (param->choices[i], true, i == param->getIndex(), [param, i]
+                {
+                    param->beginChangeGesture();
+                    param->setValueNotifyingHost (param->convertTo0to1 ((float) i));
+                    param->endChangeGesture();
+                });
+        };
+    };
+    auto choiceText = [&apvts] (const char* id)
+    {
+        return [&apvts, id] { return dynamic_cast<AudioParameterChoice*> (apvts.getParameter (id))->getCurrentChoiceName(); };
+    };
+    oversamplingMenu.setTooltip ("Oversampling of the preamp stage. Latency is the same for every setting");
+    oversamplingMenu.buildMenu = choiceMenu (ParamIDs::oversampling);
+    oversamplingMenu.getValueText = choiceText (ParamIDs::oversampling);
+    viewMenu.setTooltip ("Classic: one rack.  Classic Exp: adds Stereo Link, Mid/Side and Output.  Dual Mono: a full rack per channel");
+    viewMenu.buildMenu = choiceMenu (ParamIDs::view);
+    viewMenu.getValueText = choiceText (ParamIDs::view);
+    presetMenu.setTooltip ("Factory presets");
+    presetMenu.buildMenu = [this] (PopupMenu& m)
+    {
+        for (int i = 0; i < numFactoryPresets; ++i)
+            m.addItem (factoryPresets[i].name, true, i == processor.getCurrentProgram(),
+                       [this, i] { processor.setCurrentProgram (i); });
+    };
+    presetMenu.getValueText = [this] { return processor.getProgramName (processor.getCurrentProgram()); };
+    for (auto* m : { &sizeMenu, &oversamplingMenu, &viewMenu, &presetMenu })
+        addAndMakeVisible (*m);
+
+    // parameter pairs kept in step by the link logic
+    for (int k = 0; k < 7; ++k)
+    {
+        const char* l[] = { kChannelIDs[0].hp, kChannelIDs[0].lsFreq, kChannelIDs[0].hsFreq, kChannelIDs[0].lp,
+                            kChannelIDs[0].engage, kChannelIDs[0].lsGain, kChannelIDs[0].hsGain };
+        const char* r[] = { kChannelIDs[1].hp, kChannelIDs[1].lsFreq, kChannelIDs[1].hsFreq, kChannelIDs[1].lp,
+                            kChannelIDs[1].engage, kChannelIDs[1].lsGain, kChannelIDs[1].hsGain };
+        SyncPair pair { apvts.getParameter (l[k]), apvts.getParameter (r[k]) };
+        (k < 4 ? freqPairs : (k == 4 ? enginePairs : gainPairs)).push_back (pair);
     }
 
-    // Menus
-    viewBox.addItemList (viewNames(), 1);
-    viewBox.setTooltip ("View: Classic = one control set for both channels, Classic Exp = Classic with the response display, Dual Mono = independent channels");
-    oversamplingBox.addItemList (oversamplingNames(), 1);
-    oversamplingBox.setTooltip ("Oversampling of the preamp stage (latency is the same for every setting)");
-    for (auto* box : { &viewBox, &oversamplingBox })
-    {
-        box->setJustificationType (Justification::centredLeft);
-        addAndMakeVisible (*box);
-    }
-    comboAttachments.push_back (std::make_unique<ComboAttachment> (apvts, ParamIDs::view, viewBox));
-    comboAttachments.push_back (std::make_unique<ComboAttachment> (apvts, ParamIDs::oversampling, oversamplingBox));
-
-    for (int i = 0; i < numFactoryPresets; ++i)
-        presetBox.addItem (String (i + 1).paddedLeft ('0', 2) + "  " + factoryPresets[i].name, i + 1);
-    presetBox.setTooltip ("Factory presets");
-    presetBox.setJustificationType (Justification::centredLeft);
-    presetBox.onChange = [this]
-    {
-        const int index = presetBox.getSelectedId() - 1;
-        if (index >= 0 && index != processor.getCurrentProgram())
-            processor.setCurrentProgram (index);
-        lastShownProgram = index;
-    };
-    addAndMakeVisible (presetBox);
-
-    addAndMakeVisible (graph);
-
-    helpButton.setTooltip ("Help");
-    helpButton.onClick = [this] { helpOverlay.setVisible (true); helpOverlay.toFront (false); };
-    addAndMakeVisible (helpButton);
-    addChildComponent (helpOverlay);
-
-    setSize (kWidth, kHeight);   // last: resized() needs every component
+    shownView = processor.getView();
+    shownMidSide = apvts.getRawParameterValue (ParamIDs::midSide)->load() > 0.5f;
+    setSize (kWidth, getBaseHeight());   // last: resized() needs every component
     timerCallback();
     startTimerHz (30);
 }
@@ -115,350 +141,441 @@ void BaxPanel::setupStrip (Strip& s, int channel)
     auto& apvts = processor.apvts;
     const auto& ids = kChannelIDs[channel];
 
-    struct KnobSetup { BaxKnob& knob; const char* id; bool detented; };
-    const KnobSetup knobs[] =
+    for (auto* k : { &s.hp, &s.lsFreq, &s.hsFreq, &s.lp })
     {
-        { s.lsGain, ids.lsGain, false }, { s.hsGain, ids.hsGain, false },
-        { s.hp, ids.hp, true }, { s.lsFreq, ids.lsFreq, true }, { s.hsFreq, ids.hsFreq, true }, { s.lp, ids.lp, true },
-    };
-    for (auto& k : knobs)
+        k->numDetents = kNumDetents;
+        k->coarseStep = k->fineStep = 1.0 / (kNumDetents - 1);
+    }
+    for (auto* k : { &s.lsGain, &s.hsGain })
     {
-        if (k.detented)
-        {
-            k.knob.numDetents = kNumDetents;
-            k.knob.coarseStep = k.knob.fineStep = 1.0 / (kNumDetents - 1);
-        }
-        else
-        {
-            k.knob.bipolar = true;
-            k.knob.coarseStep = 0.5;   // hardware steps
-            k.knob.fineStep = 0.1;
-        }
-        knobAttachments.push_back (std::make_unique<KnobAttachment> (*apvts.getParameter (k.id), k.knob));
-        addAndMakeVisible (k.knob);
+        k->bipolar = true;
+        k->coarseStep = 0.5;   // hardware steps
+        k->fineStep = 0.1;
     }
 
-    s.engage = std::make_unique<EngageButton> (*apvts.getParameter (ids.engage));
-    s.engage->setTooltip ("Engage: off = true bypass of this channel (200 ms crossfade)");
-    addAndMakeVisible (*s.engage);
-    addAndMakeVisible (s.lowLcd);
-    addAndMakeVisible (s.highLcd);
+    const std::pair<BaxKnob*, const char*> knobs[] =
+    {
+        { &s.hp, ids.hp }, { &s.lsFreq, ids.lsFreq }, { &s.lsGain, ids.lsGain },
+        { &s.hsGain, ids.hsGain }, { &s.hsFreq, ids.hsFreq }, { &s.lp, ids.lp },
+    };
+    for (auto& [knob, id] : knobs)
+    {
+        knobAttachments.push_back (std::make_unique<KnobAttachment> (*apvts.getParameter (id), *knob));
+        addAndMakeVisible (*knob);
+    }
 
-    Component* list[] = { &s.lsGain, &s.hsGain, &s.hp, &s.lsFreq, &s.hsFreq, &s.lp, s.engage.get() };
-    std::copy (std::begin (list), std::end (list), s.controls);
+    s.engage = std::make_unique<LedButton> (*apvts.getParameter (ids.engage), 0.0f,
+                                            "Engage: off = true bypass (200 ms crossfade)");
+    addAndMakeVisible (*s.engage);
 }
 
 //==============================================================================
-void BaxPanel::layoutStrip (Strip& s, Rectangle<float> panel)
+void BaxPanel::placeSelector (BaxKnob& k, float cx, float cy, FreqKind kind)
 {
-    s.bounds = panel;
-    const int x0 = (int) panel.getX(), y0 = (int) panel.getY();
-    const int lowCx = x0 + 92, highCx = x0 + 276;
+    k.setVisible (true);
+    k.setBounds (roundToInt (cx - kSelectorD * 0.5f), roundToInt (cy - kSelectorD * 0.5f),
+                 (int) kSelectorD, (int) kSelectorD + BaxKnob::kBubbleHeight);
+    Scale s;
+    s.centre = { cx, cy };
+    s.radius = kSelectorD * 0.5f + 11.0f;
+    for (int d = 0; d < kNumDetents; ++d)
+    {
+        s.labels.add (scaleText (kind, d));
+        s.positions.add ((float) d / (float) (kNumDetents - 1));
+    }
+    scales.push_back (s);
+}
 
-    s.engage->setBounds (x0 + 10, y0 + 25, 74, 19);
+void BaxPanel::placeLevel (BaxKnob& k, float cx, float cy)
+{
+    k.setVisible (true);
+    k.setBounds (roundToInt (cx - kLevelD * 0.5f), roundToInt (cy - kLevelD * 0.5f),
+                 (int) kLevelD, (int) kLevelD + BaxKnob::kBubbleHeight);
+    Scale s;
+    s.centre = { cx, cy };
+    s.radius = kLevelD * 0.5f + 8.0f;
+    for (float v : { -5.0f, -3.0f, 3.0f, 5.0f })
+    {
+        s.labels.add (v > 0.0f ? "+" + String ((int) v) : String ((int) v));
+        s.positions.add ((v + 5.0f) / 10.0f);
+    }
+    scales.push_back (s);
+}
 
-    s.lsGain.setBounds (lowCx - 52, y0 + 40, 104, 118);
-    s.hsGain.setBounds (highCx - 52, y0 + 40, 104, 118);
-    s.lowLcd.setBounds (lowCx - 76, y0 + 160, 152, 22);
-    s.highLcd.setBounds (highCx - 76, y0 + 160, 152, 22);
+void BaxPanel::layoutForView()
+{
+    scales.clear();
+    captions.clear();
+    logoSubtitles.clear();
 
-    s.hp.setBounds     (lowCx - 76, y0 + 186, 64, 60);
-    s.lsFreq.setBounds (lowCx + 12, y0 + 186, 64, 60);
-    s.hsFreq.setBounds (highCx - 76, y0 + 186, 64, 60);
-    s.lp.setBounds     (highCx + 12, y0 + 186, 64, 60);
+    const bool dual = shownView == View::DualMono;
+    numRacks = shownView == View::Classic ? 1 : (shownView == View::ClassicExp ? 2 : 3);
+    const String nameL = shownMidSide ? "MID" : "LEFT", nameR = shownMidSide ? "SIDE" : "RIGHT";
+
+    for (auto& s : strips)
+        for (Component* c : { (Component*) &s.hp, (Component*) &s.lsFreq, (Component*) &s.lsGain, (Component*) &s.hsGain,
+                              (Component*) &s.hsFreq, (Component*) &s.lp, (Component*) s.engage.get() })
+            c->setVisible (false);
+
+    auto addCaption = [this] (const String& text, float cx, float y, float w, bool accent)
+    {
+        captions.push_back ({ text, { cx - w * 0.5f, y, w, 12.0f }, accent });
+    };
+
+    auto layoutRack = [&] (int rack, Strip& s, Strip* rightLevels, const String& subtitle)
+    {
+        const float y = rackY (rack), cy = y + kKnobRowY;
+        placeSelector (s.hp, xCutLow, cy, FreqKind::HP);
+        placeSelector (s.lsFreq, xShelfLow, cy, FreqKind::LS);
+        placeSelector (s.hsFreq, xShelfHigh, cy, FreqKind::HS);
+        placeSelector (s.lp, xCutHigh, cy, FreqKind::LP);
+
+        if (rightLevels != nullptr)
+        {
+            placeLevel (s.lsGain, xLowL, cy);
+            placeLevel (rightLevels->lsGain, xLowR, cy);
+            placeLevel (s.hsGain, xHighL, cy);
+            placeLevel (rightLevels->hsGain, xHighR, cy);
+            for (float x : { xLowL, xHighL })  addCaption (nameL, x, y + 12.0f, 60.0f, false);
+            for (float x : { xLowR, xHighR })  addCaption (nameR, x, y + 12.0f, 60.0f, false);
+            for (float x : { (xLowL + xLowR) * 0.5f, (xHighL + xHighR) * 0.5f })
+                addCaption ("LEVEL dB", x, y + 12.0f, 80.0f, false);
+        }
+        else
+        {
+            const float xl = (xLowL + xLowR) * 0.5f, xh = (xHighL + xHighR) * 0.5f;
+            placeLevel (s.lsGain, xl, cy);
+            placeLevel (s.hsGain, xh, cy);
+            for (float x : { xl, xh }) addCaption ("LEVEL dB", x, y + 12.0f, 80.0f, false);
+        }
+
+        s.engage->setVisible (true);
+        s.engage->setBounds (roundToInt (xEngage - 20.0f), roundToInt (cy - 26.0f), 40, 40);
+        addCaption ("ENGAGE", xEngage, cy + 18.0f, 80.0f, false);
+
+        addCaption ("CUT",   xCutLow,    y + 12.0f, 60.0f, true);
+        addCaption ("SHELF", xShelfLow,  y + 12.0f, 60.0f, true);
+        addCaption ("SHELF", xShelfHigh, y + 12.0f, 60.0f, true);
+        addCaption ("CUT",   xCutHigh,   y + 12.0f, 60.0f, true);
+        addCaption ("LOW FREQ  Hz",   (xCutLow + xShelfLow) * 0.5f,   y + 106.0f, 120.0f, true);
+        addCaption ("LOW FREQUENCY",  (xLowL + xLowR) * 0.5f,         y + 106.0f, 120.0f, true);
+        addCaption ("HIGH FREQUENCY", (xHighL + xHighR) * 0.5f,       y + 106.0f, 120.0f, true);
+        addCaption ("HIGH FREQ  kHz", (xShelfHigh + xCutHigh) * 0.5f, y + 106.0f, 120.0f, true);
+        logoSubtitles.push_back (subtitle);
+    };
+
+    if (dual)
+    {
+        layoutRack (0, strips[0], nullptr, nameL);
+        layoutRack (1, strips[1], nullptr, nameR);
+    }
+    else
+    {
+        layoutRack (0, strips[0], &strips[1], shownMidSide ? "MID / SIDE" : "STEREO");
+    }
+
+    // Stereo link / Mid-Side / Output rack
+    const bool hasControlRack = numRacks >= 2;
+    for (Component* c : { (Component*) linkLed.get(), (Component*) midSideLed.get(), (Component*) &outputKnob })
+        c->setVisible (hasControlRack);
+    if (hasControlRack)
+    {
+        const float y = rackY (numRacks - 1), cy = y + kKnobRowY;
+        linkLed->setBounds (140 - 20, roundToInt (cy - 26.0f), 40, 40);
+        addCaption ("STEREO", 140.0f, cy + 18.0f, 80.0f, false);
+        addCaption ("LINK",   140.0f, cy + 30.0f, 80.0f, false);
+        midSideLed->setBounds (600 - 20, roundToInt (cy - 26.0f), 40, 40);
+        addCaption ("MID/SIDE", 600.0f, cy + 18.0f, 80.0f, false);
+
+        outputKnob.setBounds (roundToInt (1065.0f - kSelectorD * 0.5f), roundToInt (cy - kSelectorD * 0.5f),
+                              (int) kSelectorD, (int) kSelectorD + BaxKnob::kBubbleHeight);
+        Scale s;
+        s.centre = { 1065.0f, cy };
+        s.radius = kSelectorD * 0.5f + 11.0f;
+        for (float v : { -10.0f, -5.0f, 5.0f, 10.0f })
+        {
+            s.labels.add (v > 0.0f ? "+" + String ((int) v) : String ((int) v));
+            s.positions.add ((v + 10.0f) / 20.0f);
+        }
+        scales.push_back (s);
+        addCaption ("OUTPUT", 1065.0f, y + 12.0f, 80.0f, true);
+    }
+
+    repaint();
 }
 
 void BaxPanel::resized()
 {
-    // top strip
-    viewBox.setBounds (262, 7, 112, 21);
-    oversamplingBox.setBounds (410, 7, 62, 21);
-    presetBox.setBounds (534, 7, 218, 21);
-
-    layoutStrip (strips[0], { 8.0f, kStripY, kStripW, kStripH });
-    layoutStrip (strips[1], { 8.0f + kStripW + 8.0f, kStripY, kStripW, kStripH });
-
-    graphPanel  = { 8.0f, kRowY, 552.0f, kRowH };
-    outputPanel = { 568.0f, kRowY, 184.0f, kRowH };
-    graph.setBounds (graphPanel.reduced (8.0f, 0.0f).withTrimmedTop (24.0f).withTrimmedBottom (6.0f).toNearestInt());
-
-    outputKnob.setBounds (576, 322, 66, 80);
-    meterL.setBounds (646, 324, 9, 72);
-    meterR.setBounds (658, 324, 9, 72);
-    midSideButton.setBounds (678, 330, 66, 22);
-    linkButton.setBounds (678, 366, 66, 22);
-
-    helpButton.setBounds (kWidth - 26, kBottomBarY + 6, 20, 20);
-    helpOverlay.setBounds (getLocalBounds());
+    sizeMenu.setBounds (14, 3, 64, 18);
+    bypassButton->setBounds (104, 4, 66, 16);
+    oversamplingMenu.setBounds (236, 3, 170, 18);
+    viewMenu.setBounds (470, 3, 220, 18);
+    presetMenu.setBounds (740, 3, 260, 18);
+    monitor->setBounds (1036, 3, 150, 18);
+    layoutForView();
 }
 
 //==============================================================================
-void BaxPanel::setActive (Component& c, bool active, const String& hint)
+void BaxPanel::syncLinkedParameters()
 {
-    if (c.isEnabled() != active)
+    // Classic views: the right channel's frequency selectors and Engage follow the left.
+    // Stereo link: the levels too (and, in Dual Mono, everything).
+    const bool classic = shownView != View::DualMono;
+    const bool link = processor.isLinkOn();
+
+    auto sync = [] (std::vector<SyncPair>& pairs, bool active)
     {
-        c.setEnabled (active);
-        c.setAlpha (active ? 1.0f : 0.35f);
-    }
-    if (auto* k = dynamic_cast<BaxKnob*> (&c))
-        k->inactiveHint = hint;
-}
+        for (auto& p : pairs)
+        {
+            const float l = p.left->getValue(), r = p.right->getValue();
+            if (active && std::abs (l - r) > 1.0e-6f)
+            {
+                // whichever side moved since the last tick wins; otherwise left wins
+                const bool rightMoved = std::abs (r - p.lastRight) > 1.0e-6f && std::abs (l - p.lastLeft) <= 1.0e-6f;
+                auto* target = rightMoved ? p.left : p.right;
+                const float value = rightMoved ? r : l;
+                target->beginChangeGesture();
+                target->setValueNotifyingHost (value);
+                target->endChangeGesture();
+            }
+            p.lastLeft = p.left->getValue();
+            p.lastRight = p.right->getValue();
+        }
+    };
 
-void BaxPanel::updateViewState()
-{
-    const auto view = processor.getView();
-    const bool classic = view != View::DualMono;
-    const bool linked = processor.isLinked();
-    const bool ms = processor.apvts.getRawParameterValue (ParamIDs::midSide)->load() > 0.5f;
-
-    // Classic views: one control set; the second strip is replaced by a plate.
-    for (auto* c : strips[1].controls)
-        c->setVisible (! classic);
-    strips[1].lowLcd.setVisible (! classic);
-    strips[1].highLcd.setVisible (! classic);
-
-    for (auto* c : strips[1].controls)
-        setActive (*c, ! linked, "Linked: this channel follows the first channel");
-    strips[1].lowLcd.setDimmed (linked);
-    strips[1].highLcd.setDimmed (linked);
-
-    setActive (linkButton, ! classic);
-    graph.setVisible (view != View::Classic);
-
-    if (view != currentView || linked != linkedShown || ms != midSideShown)
-    {
-        currentView = view;
-        linkedShown = linked;
-        midSideShown = ms;
-        repaint();
-    }
+    sync (freqPairs, classic || link);
+    sync (enginePairs, classic || link);
+    sync (gainPairs, link);
 }
 
 void BaxPanel::timerCallback()
 {
-    updateViewState();
-
-    const auto settings = processor.readSettings();
-    for (int c = 0; c < 2; ++c)
+    const auto view = processor.getView();
+    const bool ms = processor.apvts.getRawParameterValue (ParamIDs::midSide)->load() > 0.5f;
+    if (view != shownView || ms != shownMidSide)
     {
-        const auto& cs = c == 0 ? settings.a : settings.b;
-        auto& s = strips[c];
-        s.lowLcd.setContent ("LOW " + detentText (FreqKind::LS, cs.lsFreq), formatGainShort (cs.lsGainDb) + " dB");
-        s.highLcd.setContent ("HIGH " + detentText (FreqKind::HS, cs.hsFreq), formatGainShort (cs.hsGainDb) + " dB");
-        const bool engaged = c == 0 ? settings.engagedA : settings.engagedB;
-        if (! linkedShown || c == 0)
+        const bool heightChanged = view != shownView;
+        shownView = view;
+        shownMidSide = ms;
+        if (heightChanged)
         {
-            s.lowLcd.setDimmed (! engaged);
-            s.highLcd.setDimmed (! engaged);
+            setSize (kWidth, getBaseHeight());
+            if (onViewChanged) onViewChanged();
         }
+        layoutForView();
     }
 
-    ResponseGraph::State gs;
-    gs.a = settings.a;
-    gs.b = settings.b;
-    gs.engagedA = settings.engagedA;
-    gs.engagedB = settings.engagedB;
-    gs.midSide = settings.midSide;
-    gs.linked = processor.isLinked();
-    gs.outputDb = settings.outputDb;
-    gs.sampleRate = processor.displaySampleRate.load();
-    graph.setState (gs);
+    syncLinkedParameters();
 
-    meterL.setLevel (processor.outputPeak[0].load());
-    meterR.setLevel (processor.outputPeak[1].load());
-
-    const int program = processor.getCurrentProgram();
-    if (program != lastShownProgram)
-    {
-        lastShownProgram = program;
-        presetBox.setSelectedId (program + 1, dontSendNotification);
-    }
+    for (auto* m : { &oversamplingMenu, &viewMenu, &presetMenu })
+        m->refresh();
 }
 
 //==============================================================================
 void BaxPanel::createBackground()
 {
-    // Rendered at 2x so it stays sharp when the window is enlarged.
-    background = Image (Image::RGB, kWidth * 2, kHeight * 2, true);
-    Graphics g (background);
+    // brushed-metal streaks on a transparent layer, drawn over the rack gradients;
+    // rendered at 2x so it stays sharp when enlarged
+    const int h = baseHeightFor (View::DualMono);
+    metal = Image (Image::ARGB, kWidth * 2, h * 2, true);
+    Graphics g (metal);
     g.addTransform (AffineTransform::scale (2.0f));
 
-    g.setGradientFill (ColourGradient (Colour (0xff3b3e42), 0.0f, 0.0f, Colour (0xff1e2023), 0.0f, (float) kHeight, false));
-    g.fillAll();
-
-    // brushed metal: faint full-width lines plus random short streaks
     Random rng (0xba5e);
-    for (int y = 0; y < kHeight; ++y)
+    for (int y = 0; y < h; ++y)
     {
-        g.setColour ((rng.nextBool() ? Colours::white : Colours::black).withAlpha (rng.nextFloat() * 0.035f));
+        g.setColour ((rng.nextBool() ? Colours::white : Colours::black).withAlpha (rng.nextFloat() * 0.03f));
         g.fillRect (0, y, kWidth, 1);
     }
-    for (int i = 0; i < 2200; ++i)
+    for (int i = 0; i < 3000; ++i)
     {
-        const int x = rng.nextInt (kWidth), y = rng.nextInt (kHeight), len = 20 + rng.nextInt (140);
-        g.setColour ((rng.nextBool() ? Colours::white : Colours::black).withAlpha (0.015f + rng.nextFloat() * 0.03f));
+        const int x = rng.nextInt (kWidth), y = rng.nextInt (h), len = 20 + rng.nextInt (160);
+        g.setColour ((rng.nextBool() ? Colours::white : Colours::black).withAlpha (0.012f + rng.nextFloat() * 0.025f));
         g.fillRect (x, y, len, 1);
     }
-
-    ColourGradient vignette (Colours::transparentBlack, kWidth * 0.5f, kHeight * 0.45f,
-                             Colours::black.withAlpha (0.35f), 0.0f, 0.0f, true);
-    g.setGradientFill (vignette);
-    g.fillAll();
 }
 
-void BaxPanel::drawWordmark (Graphics& g, Rectangle<float> area)
+static void drawScrew (Graphics& g, Point<float> c, float r)
 {
-    // Stylised lowercase wordmark: chrome "baxr", blue "eq", and a swoosh.
-    const float baseline = area.getBottom() - 7.0f;
+    g.setColour (Colours::black.withAlpha (0.6f));
+    g.fillEllipse (Rectangle<float> (r * 2.0f + 2.0f, r * 2.0f + 2.0f).withCentre (c.translated (0.0f, 0.8f)));
+    g.setGradientFill (ColourGradient (Colour (0xffb4bac0), c.x - r, c.y - r, Colour (0xff41464c), c.x + r, c.y + r, false));
+    g.fillEllipse (Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (c));
+    g.setColour (Colour (0xff1a1d20));
+    g.drawLine (c.x - r * 0.6f, c.y - r * 0.6f, c.x + r * 0.6f, c.y + r * 0.6f, 1.2f);
+    g.drawLine (c.x - r * 0.6f, c.y + r * 0.6f, c.x + r * 0.6f, c.y - r * 0.6f, 1.2f);
+}
 
+void BaxPanel::drawRack (Graphics& g, float y) const
+{
+    const auto rack = Rectangle<float> (0.0f, y, (float) kWidth, kRackH);
+
+    // rack frame with ears
+    g.setGradientFill (ColourGradient (Colour (0xff2f3236), 0.0f, rack.getY(), Colour (0xff17191b), 0.0f, rack.getBottom(), false));
+    g.fillRoundedRectangle (rack, 4.0f);
+    g.setColour (Colours::white.withAlpha (0.14f));
+    g.drawHorizontalLine ((int) rack.getY() + 1, 4.0f, rack.getRight() - 4.0f);
+    g.setColour (Colours::black);
+    g.drawRoundedRectangle (rack, 4.0f, 1.0f);
+
+    for (bool left : { true, false })
+    {
+        const float earX = left ? 0.0f : (float) kWidth - kFaceX;
+        // rack-mount slots
+        for (float sy : { y + 20.0f, y + kRackH - 20.0f })
+        {
+            auto slot = Rectangle<float> (18.0f, 10.0f).withCentre ({ left ? 18.0f : (float) kWidth - 18.0f, sy });
+            g.setColour (Colour (0xff050607));
+            g.fillRoundedRectangle (slot, 5.0f);
+            g.setColour (Colours::white.withAlpha (0.12f));
+            g.drawRoundedRectangle (slot.translated (0.0f, 0.8f), 5.0f, 0.8f);
+        }
+        // vents
+        for (int col = 0; col < 2; ++col)
+            for (int row = 0; row < 8; ++row)
+            {
+                const float vx = earX + (left ? 36.0f : 12.0f) + (float) col * 13.0f;
+                auto vent = Rectangle<float> (vx, y + 24.0f + (float) row * 10.5f, 10.0f, 4.0f);
+                g.setColour (Colour (0xff060708));
+                g.fillRoundedRectangle (vent, 2.0f);
+                g.setColour (Colours::white.withAlpha (0.08f));
+                g.drawHorizontalLine ((int) vent.getBottom(), vent.getX() + 1.0f, vent.getRight() - 1.0f);
+            }
+    }
+
+    // faceplate
+    auto face = Rectangle<float> (kFaceX, y + 6.0f, (float) kWidth - 2.0f * kFaceX, kRackH - 12.0f);
+    DropShadow (Colours::black.withAlpha (0.6f), 8, { 0, 2 }).drawForRectangle (g, face.toNearestInt());
+    g.setGradientFill (ColourGradient (Colour (0xff2c2f33), 0.0f, face.getY(), Colour (0xff1c1e21), 0.0f, face.getBottom(), false));
+    g.fillRoundedRectangle (face, 6.0f);
+    g.setColour (Colours::white.withAlpha (0.16f));
+    g.drawHorizontalLine ((int) face.getY() + 1, face.getX() + 6.0f, face.getRight() - 6.0f);
+    g.setColour (BaxColours::bevelDark);
+    g.drawRoundedRectangle (face, 6.0f, 1.0f);
+
+    for (auto c : { face.getTopLeft().translated (10.0f, 10.0f), face.getTopRight().translated (-10.0f, 10.0f),
+                    face.getBottomLeft().translated (10.0f, -10.0f), face.getBottomRight().translated (-10.0f, -10.0f) })
+        drawScrew (g, c, 4.0f);
+}
+
+void BaxPanel::drawLogo (Graphics& g, Rectangle<float> area, const String& subtitle) const
+{
+    // stylised wordmark: chrome "baxr" over blue "eq", with a swoosh
     GlyphArrangement main;
-    main.addLineOfText (Font (FontOptions (27.0f, Font::bold | Font::italic)), "baxr", area.getX(), baseline);
+    main.addLineOfText (Font (FontOptions (30.0f, Font::bold | Font::italic)), "baxr", 0.0f, 0.0f);
     Path mainPath;
     main.createPath (mainPath);
-    const auto mainBounds = mainPath.getBounds();
+    auto mb = mainPath.getBounds();
+    const auto t = AffineTransform::translation (area.getCentreX() - mb.getCentreX(), area.getY() + 22.0f - mb.getBottom() + 10.0f);
+    mainPath.applyTransform (t);
+    mb = mainPath.getBounds();
 
     g.setColour (Colours::black.withAlpha (0.6f));
     g.fillPath (mainPath, AffineTransform::translation (1.0f, 1.5f));
-    ColourGradient chrome (Colour (0xffffffff), 0.0f, mainBounds.getY(), Colour (0xff8c949c), 0.0f, mainBounds.getBottom(), false);
+    ColourGradient chrome (Colour (0xffffffff), 0.0f, mb.getY(), Colour (0xff8c949c), 0.0f, mb.getBottom(), false);
     chrome.addColour (0.5, Colour (0xffd5dade));
     chrome.addColour (0.55, Colour (0xffa4acb3));
     g.setGradientFill (chrome);
     g.fillPath (mainPath);
 
-    GlyphArrangement second;
-    second.addLineOfText (Font (FontOptions (19.0f, Font::plain)), "eq", mainBounds.getRight() + 6.0f, baseline);
-    Path secondPath;
-    second.createPath (secondPath);
-    g.setColour (Colours::black.withAlpha (0.5f));
-    g.fillPath (secondPath, AffineTransform::translation (1.0f, 1.0f));
+    GlyphArrangement eq;
+    eq.addLineOfText (Font (FontOptions (20.0f, Font::plain)), "eq", 0.0f, 0.0f);
+    Path eqPath;
+    eq.createPath (eqPath);
+    const auto eb = eqPath.getBounds();
+    eqPath.applyTransform (AffineTransform::translation (area.getCentreX() - eb.getCentreX(), mb.getBottom() + 4.0f - eb.getY()));
     g.setColour (BaxColours::blue);
-    g.fillPath (secondPath);
+    g.fillPath (eqPath);
 
     Path swoosh;
-    const float sx = mainBounds.getX() + 2.0f, sy = baseline + 3.5f;
-    const float ex = secondPath.getBounds().getRight();
+    const float sx = mb.getX(), sy = eqPath.getBounds().getBottom() + 5.0f, ex = mb.getRight();
     swoosh.startNewSubPath (sx, sy);
-    swoosh.quadraticTo ((sx + ex) * 0.5f, sy + 3.5f, ex + 6.0f, sy - 2.0f);
+    swoosh.quadraticTo ((sx + ex) * 0.5f, sy + 4.0f, ex + 4.0f, sy - 3.0f);
     g.setGradientFill (ColourGradient (BaxColours::blue.withAlpha (0.0f), sx, sy, BaxColours::blue, ex, sy, false));
     g.strokePath (swoosh, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+
+    if (subtitle.isNotEmpty())
+    {
+        g.setFont (CustomLookAndFeel::uiFont (11.0f, true));
+        g.setColour (BaxColours::labelText);
+        g.drawText (subtitle, Rectangle<float> (area.getX(), sy + 8.0f, area.getWidth(), 14.0f), Justification::centred);
+    }
 }
 
 void BaxPanel::paint (Graphics& g)
 {
-    g.drawImage (background, getLocalBounds().toFloat());
+    g.fillAll (Colour (0xff0c0d0e));
 
-    // --- top strip ------------------------------------------------------------------
-    auto top = Rectangle<float> (0.0f, 0.0f, (float) kWidth, (float) kTopStripH);
-    g.setGradientFill (ColourGradient (Colour (0xff4a4e53), 0.0f, 0.0f, Colour (0xff2b2e32), 0.0f, top.getBottom(), false));
-    g.fillRect (top);
-    g.setColour (Colours::white.withAlpha (0.18f));
-    g.drawHorizontalLine (0, 0.0f, (float) kWidth);
-    g.setColour (BaxColours::bevelDark);
-    g.drawHorizontalLine (kTopStripH - 1, 0.0f, (float) kWidth);
-    g.setColour (Colours::white.withAlpha (0.06f));
-    g.drawHorizontalLine (kTopStripH, 0.0f, (float) kWidth);
-
-    drawWordmark (g, { 14.0f, 0.0f, 200.0f, (float) kTopStripH });
-    CustomLookAndFeel::drawSmallLabel (g, "View",   { 214.0f, 8.0f, 44.0f, 19.0f }, Justification::centredRight);
-    CustomLookAndFeel::drawSmallLabel (g, "OS",     { 378.0f, 8.0f, 28.0f, 19.0f }, Justification::centredRight);
-    CustomLookAndFeel::drawSmallLabel (g, "Preset", { 484.0f, 8.0f, 46.0f, 19.0f }, Justification::centredRight);
-
-    // --- channel strips ---------------------------------------------------------------
-    const bool classic = currentView != View::DualMono;
-    const String nameA = midSideShown ? "Mid" : (classic ? "Stereo" : "Left");
-    const String nameB = midSideShown ? "Side" : "Right";
-
-    for (int c = 0; c < 2; ++c)
-    {
-        const auto& s = strips[c];
-        const String title = c == 0 ? (classic && midSideShown ? "Mid + Side" : nameA)
-                                    : (classic ? "Classic View" : nameB + (linkedShown ? "  (linked)" : ""));
-        CustomLookAndFeel::drawPanel (g, s.bounds, title);
-
-        if (c == 1 && classic)
-        {
-            // plate shown in place of the second strip
-            auto plate = s.bounds.reduced (20.0f, 0.0f).withTrimmedTop (40.0f).withTrimmedBottom (24.0f);
-            CustomLookAndFeel::drawInsetBox (g, plate, 4.0f);
-            g.setFont (CustomLookAndFeel::uiFont (30.0f, true));
-            g.setColour (Colour (0xffc8cdd2).withAlpha (0.9f));
-            g.drawText ("BAXR", plate.removeFromTop (plate.getHeight() * 0.55f), Justification::centredBottom);
-            g.setFont (CustomLookAndFeel::uiFont (11.0f, true));
-            g.setColour (BaxColours::labelText);
-            g.drawText ("ONE CONTROL SET DRIVES BOTH CHANNELS", plate.removeFromTop (22.0f), Justification::centred);
-            g.setColour (BaxColours::labelText.withAlpha (0.6f));
-            g.drawText ("Choose Dual Mono for independent channels", plate.removeFromTop (18.0f), Justification::centred);
-            continue;
-        }
-
-        // divider between the low and the high section
-        const float dx = s.bounds.getX() + s.bounds.getWidth() * 0.5f;
-        g.setColour (BaxColours::bevelDark);
-        g.drawVerticalLine ((int) dx, s.bounds.getY() + 50.0f, s.bounds.getBottom() - 10.0f);
-        g.setColour (Colours::white.withAlpha (0.07f));
-        g.drawVerticalLine ((int) dx + 1, s.bounds.getY() + 50.0f, s.bounds.getBottom() - 10.0f);
-    }
-
-    // --- bottom row --------------------------------------------------------------------
-    CustomLookAndFeel::drawPanel (g, graphPanel, currentView == View::Classic ? "Baxandall Equalizer" : "Response");
-    if (currentView == View::Classic)
-    {
-        auto plate = graphPanel.reduced (8.0f, 0.0f).withTrimmedTop (24.0f).withTrimmedBottom (6.0f);
-        CustomLookAndFeel::drawInsetBox (g, plate, 3.0f);
-        g.setFont (CustomLookAndFeel::uiFont (12.0f, true));
-        g.setColour (BaxColours::labelText);
-        g.drawText ("CLASSIC VIEW  -  choose Classic Exp or Dual Mono for the response display", plate, Justification::centred);
-    }
-
-    CustomLookAndFeel::drawPanel (g, outputPanel, "Output");
-    CustomLookAndFeel::drawSmallLabel (g, "L  R", { 642.0f, 398.0f, 30.0f, 10.0f }, Justification::centred);
-    CustomLookAndFeel::drawSmallLabel (g, "Mode",   { 678.0f, 318.0f, 66.0f, 10.0f }, Justification::centredLeft);
-    CustomLookAndFeel::drawSmallLabel (g, "Stereo", { 678.0f, 354.0f, 66.0f, 10.0f }, Justification::centredLeft);
-
-    // --- bottom bar --------------------------------------------------------------------
-    auto bar = Rectangle<float> (0.0f, (float) kBottomBarY, (float) kWidth, (float) (kHeight - kBottomBarY));
-    g.setGradientFill (ColourGradient (Colour (0xff17191b), 0.0f, bar.getY(), Colour (0xff0c0d0e), 0.0f, bar.getBottom(), false));
+    // --- top bar --------------------------------------------------------------------
+    auto bar = Rectangle<float> (0.0f, 0.0f, (float) kWidth, kTopBarH);
+    g.setGradientFill (ColourGradient (Colour (0xff1d1f22), 0.0f, 0.0f, Colour (0xff08090a), 0.0f, bar.getBottom(), false));
     g.fillRect (bar);
     g.setColour (Colours::white.withAlpha (0.1f));
-    g.drawHorizontalLine (kBottomBarY, 0.0f, (float) kWidth);
+    g.drawHorizontalLine ((int) bar.getBottom() - 1, 0.0f, (float) kWidth);
 
-    auto tab = Rectangle<float> (8.0f, bar.getY() + 7.0f, 52.0f, 18.0f);
-    g.setGradientFill (ColourGradient (BaxColours::headerTop, 0.0f, tab.getY(), BaxColours::headerBottom, 0.0f, tab.getBottom(), false));
-    g.fillRoundedRectangle (tab, 3.0f);
-    g.setColour (BaxColours::bevelDark);
-    g.drawRoundedRectangle (tab, 3.0f, 1.0f);
-    g.setColour (BaxColours::headerText);
-    g.setFont (CustomLookAndFeel::uiFont (10.5f, true));
-    g.drawText ("EQ", tab, Justification::centred);
+    // --- racks ----------------------------------------------------------------------
+    for (int r = 0; r < numRacks; ++r)
+        drawRack (g, rackY (r));
+    g.drawImage (metal, Rectangle<float> (0.0f, 0.0f, (float) kWidth, (float) baseHeightFor (View::DualMono)));
 
-    auto inset = bar.reduced (70.0f, 7.0f);
-    CustomLookAndFeel::drawInsetBox (g, inset, 3.0f);
-    g.setFont (CustomLookAndFeel::uiFont (13.0f, true));
-    g.setColour (Colour (0xffc8cdd2));
-    g.drawText ("BAXR  BAXANDALL EQ", inset, Justification::centred);
+    for (size_t r = 0; r < logoSubtitles.size(); ++r)
+        drawLogo (g, { 80.0f, rackY ((int) r) + 18.0f, 86.0f, 90.0f }, logoSubtitles[r]);
+
+    // --- printed scales around the knobs -----------------------------------------------
+    const auto rotStart = MathConstants<float>::pi * 1.25f, rotEnd = MathConstants<float>::pi * 2.75f;
+    g.setFont (CustomLookAndFeel::uiFont (9.5f, true));
+    for (const auto& s : scales)
+        for (int i = 0; i < s.labels.size(); ++i)
+        {
+            const float a = rotStart + s.positions[i] * (rotEnd - rotStart);
+            const float x = s.centre.x + std::sin (a) * s.radius, y = s.centre.y - std::cos (a) * s.radius;
+            const auto box = Rectangle<float> (34.0f, 12.0f).withCentre ({ x, y });
+            g.setColour (Colours::black.withAlpha (0.5f));
+            g.drawText (s.labels[i], box.translated (0.0f, 1.0f), Justification::centred);
+            g.setColour (s.labels[i] == "OUT" ? BaxColours::blue : Colour (0xffd2d6da));
+            g.drawText (s.labels[i], box, Justification::centred);
+        }
+
+    // --- captions ---------------------------------------------------------------------
+    for (const auto& c : captions)
+    {
+        g.setFont (CustomLookAndFeel::uiFont (10.5f, true));
+        g.setColour (Colours::black.withAlpha (0.5f));
+        g.drawText (c.text, c.area.translated (0.0f, 1.0f), Justification::centred);
+        g.setColour (c.accent ? BaxColours::blue : BaxColours::labelText);
+        g.drawText (c.text, c.area, Justification::centred);
+    }
 }
 
 //==============================================================================
 BaxAudioProcessorEditor::BaxAudioProcessorEditor (BaxAudioProcessor& p)
     : AudioProcessorEditor (&p), processor (p), panel (p)
 {
-    const int savedWidth = processor.editorWidth.load();
     addAndMakeVisible (panel);
-
     setResizable (true, true);
-    setResizeLimits (kWidth * 6 / 10, kHeight * 6 / 10, kWidth * 5 / 2, kHeight * 5 / 2);
-    getConstrainer()->setFixedAspectRatio ((double) kWidth / (double) kHeight);
 
-    const int width = savedWidth > 0 ? jlimit (kWidth * 6 / 10, kWidth * 5 / 2, savedWidth) : kWidth;
-    setSize (width, roundToInt (width * (double) kHeight / (double) kWidth));
-    sizeRestored = true;
+    panel.onViewChanged = [this] { applyViewSize (getScale()); };
+    panel.onScaleRequested = [this] (float s) { applyViewSize (s); };
+
+    applyViewSize (jlimit (0.5f, 2.5f, processor.editorScale.load()));
+    ready = true;
+}
+
+void BaxAudioProcessorEditor::applyViewSize (float scale)
+{
+    const int w = BaxPanel::kBaseWidth, h = panel.getBaseHeight();
+    const bool wasReady = ready;
+    ready = false;   // the limits below can resize the window: don't store that scale
+    setResizeLimits (w / 2, h / 2, w * 5 / 2, h * 5 / 2);
+    getConstrainer()->setFixedAspectRatio ((double) w / (double) h);
+    ready = wasReady;
+    setSize (roundToInt ((float) w * scale), roundToInt ((float) h * scale));
 }
 
 void BaxAudioProcessorEditor::resized()
 {
-    panel.setBounds (0, 0, kWidth, kHeight);
-    panel.setTransform (AffineTransform::scale ((float) getWidth() / (float) kWidth));
-
-    if (sizeRestored)
-        processor.editorWidth.store (getWidth());
+    panel.setBounds (0, 0, BaxPanel::kBaseWidth, panel.getBaseHeight());
+    panel.setTransform (AffineTransform::scale (getScale()));
+    if (ready)
+        processor.editorScale.store (getScale());
 }

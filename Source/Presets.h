@@ -17,49 +17,53 @@ struct FactoryPreset
     const char* name;
     PresetChannel a, b;
     bool midSide = false;
-    bool link = true;
+    bool link = false;
     int oversampling = 0;   // 0 = 1X, 1 = 2X, 2 = 4X
     float outputDb = 0.0f;
 };
 
-// Factory presets. Frequencies use the detent tables in DSP/EqTables.h:
-//   HP  Off 12 18 24 36 48 72 120 Hz        LS  40 75 105 150 230 300 450 600 Hz
-//   HS  1.5 2.4 3.5 5 7 10 14 20 kHz        LP  Off 70 50 35 24 18 12 6.5 kHz
+// Factory presets. Detent indices (host value = index / 7), see DSP/EqTables.h:
+//   index:  0     1     2     3     4      5      6     7
+//   CUT     Out   12    18    24    30     36     43    54 Hz
+//   SHELF   74    84    98    116   131    166    230   361 Hz
+//   SHELF   18k   7.1k  4.8k  3.4k  2.5k   2.1k   1.8k  1.6k Hz
+//   CUT     Out   70k   28k   18k   12.6k  11.1k  9k    7.5k Hz
+// Each channel: { HP, low shelf freq, low level dB, high level dB, high shelf freq, LP }
 inline const FactoryPreset factoryPresets[] =
 {
     { "Init", {}, {} },
     { "Acoustic Guitar Control",
-      { detent (6), detent (4), -2.5f, 1.5f, detent (5), detent (2) },
-      { detent (6), detent (4), -2.5f, 1.5f, detent (5), detent (2) } },
+      { detent (7), detent (6), -2.5f, 1.5f, detent (2), detent (3) },
+      { detent (7), detent (6), -2.5f, 1.5f, detent (2), detent (3) } },
     { "Bass Bump 'n Tuck",
-      { detent (3), detent (1), 3.5f, -1.5f, detent (2), detent (5) },
-      { detent (3), detent (1), 3.5f, -1.5f, detent (2), detent (5) } },
+      { detent (4), detent (1), 3.5f, -1.5f, detent (4), detent (6) },
+      { detent (4), detent (1), 3.5f, -1.5f, detent (4), detent (6) } },
     { "Drum Driver",
-      { detent (2), detent (3), 3.0f, 3.0f, detent (4), detent (1) },
-      { detent (2), detent (3), 3.0f, 3.0f, detent (4), detent (1) }, false, true, 1, -1.0f },
+      { detent (2), detent (3), 3.0f, 3.0f, detent (3), detent (1) },
+      { detent (2), detent (3), 3.0f, 3.0f, detent (3), detent (1) }, false, false, 1, -1.0f },
     { "Drum Hype",
-      { detent (3), detent (2), 4.5f, 4.0f, detent (5), detent (1) },
-      { detent (3), detent (2), 4.5f, 4.0f, detent (5), detent (1) }, false, true, 1, -2.0f },
+      { detent (3), detent (2), 4.5f, 4.0f, detent (1), detent (1) },
+      { detent (3), detent (2), 4.5f, 4.0f, detent (1), detent (1) }, false, false, 1, -2.0f },
     { "Drum MS",
-      { detent (2), detent (2), 3.0f, 1.0f, detent (4), detent (1) },     // mid: punch
-      { detent (5), detent (5), -2.0f, 3.5f, detent (6), detent (1) },    // side: tighter low end, air
+      { detent (2), detent (2), 3.0f, 1.0f, detent (3), detent (1) },     // mid: punch
+      { detent (6), detent (5), -2.0f, 3.5f, detent (0), detent (1) },    // side: tighter lows, air
       true, false, 1, -1.0f },
     { "Home HiFi",
-      { detent (1), detent (2), 2.5f, 2.0f, detent (6), 0.0f },
-      { detent (1), detent (2), 2.5f, 2.0f, detent (6), 0.0f } },
+      { detent (1), detent (2), 2.5f, 2.0f, detent (1), 0.0f },
+      { detent (1), detent (2), 2.5f, 2.0f, detent (1), 0.0f } },
     { "Mix Elixer",
-      { detent (2), detent (1), 1.5f, 1.5f, detent (7), detent (1) },
-      { detent (2), detent (1), 1.5f, 1.5f, detent (7), detent (1) }, false, true, 2, -0.5f },
+      { detent (2), detent (1), 1.5f, 1.5f, detent (0), detent (1) },
+      { detent (2), detent (1), 1.5f, 1.5f, detent (0), detent (1) }, false, false, 2, -0.5f },
     { "Pads Lift",
-      { detent (5), detent (5), -1.5f, 3.0f, detent (3), 0.0f },
-      { detent (5), detent (5), -1.5f, 3.0f, detent (3), 0.0f } },
+      { detent (6), detent (5), -1.5f, 3.0f, detent (3), 0.0f },
+      { detent (6), detent (5), -1.5f, 3.0f, detent (3), 0.0f } },
     { "Track Everything",
       { detent (2), 0.5f, 0.0f, 0.0f, 0.5f, detent (1) },
       { detent (2), 0.5f, 0.0f, 0.0f, 0.5f, detent (1) } },
     { "Vocal Sheen",
-      { detent (6), detent (5), -1.5f, 3.5f, detent (6), detent (2) },
-      { detent (6), detent (5), -1.5f, 3.5f, detent (6), detent (2) } },
-    { "Zeroed Out 4X", {}, {}, false, true, 2, 0.0f },
+      { detent (7), detent (5), -1.5f, 3.5f, detent (1), detent (2) },
+      { detent (7), detent (5), -1.5f, 3.5f, detent (1), detent (2) } },
+    { "Zeroed Out 4X", {}, {}, false, false, 2, 0.0f },
 };
 
 inline constexpr int numFactoryPresets = (int) (sizeof (factoryPresets) / sizeof (factoryPresets[0]));

@@ -2,7 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
-#include "../DSP/EqChannel.h"
+#include "../DSP/EqTables.h"
 
 //==============================================================================
 /**
@@ -10,21 +10,21 @@
       - vertical drag (whole range in 200 px) and scroll wheel move in coarse steps;
         hold Shift for fine steps
       - double-click resets to the default value
-      - small knobs show their label underneath, which swaps to the value while
-        hovering or dragging; the tooltip shows the value too
+      - while hovering or dragging, the value is shown in a small bubble under the knob
       - detented knobs draw one tick per position and snap to them
+    The component is the knob (a square) plus a 16 px strip below it for the bubble.
     Values are in the parameter's own units. Drawing is in CustomLookAndFeel.
 */
 class BaxKnob : public juce::Slider
 {
 public:
     enum class Size { Large, Small };
+    static constexpr int kBubbleHeight = 16;
 
-    BaxKnob (Size, const juce::String& labelText);
+    BaxKnob (Size, const juce::String& name);
 
     Size getKnobSize() const noexcept           { return knobSize; }
     void setDefaultValue (double v) noexcept    { defaultValue = v; }
-    void setLabel (const juce::String& l)       { if (l != label) { label = l; repaint(); } }
 
     bool bipolar = false;        // value arc grows from the centre
     int numDetents = 0;          // > 1: stepped knob (frequency selector)
@@ -32,7 +32,6 @@ public:
 
     std::function<void()> onGestureBegin, onGestureEnd;
     std::function<juce::String (double)> displayValue;   // e.g. "+2.5 dB", "230 Hz"
-    juce::String inactiveHint;
 
     juce::String getTooltip() override;
     void paint (juce::Graphics&) override;
@@ -50,7 +49,6 @@ private:
     void setValueWithGesture (double v);
 
     Size knobSize;
-    juce::String label;
     double defaultValue = 0.0;
     float lastDragY = 0.0f;
     double dragValue = 0.0;
@@ -72,66 +70,71 @@ private:
 };
 
 //==============================================================================
-/** Blue LCD readout, e.g. "LOW  230 Hz  +2.5". */
-class LcdDisplay : public juce::Component
+/** Round push switch with an LED in a chrome bezel (Engage, Stereo Link, Mid/Side).
+    Lit when the parameter's value is "on"; onValue is the plain value meaning on. */
+class LedButton : public juce::Button
 {
 public:
-    void setContent (const juce::String& name, const juce::String& value);
-    void setDimmed (bool shouldDim);
-    void paint (juce::Graphics&) override;
-
-private:
-    juce::String nameText, valueText;
-    bool dimmed = false;
-};
-
-//==============================================================================
-/** Frequency response of both EQ channels, drawn on the blue LCD. */
-class ResponseGraph : public juce::Component
-{
-public:
-    struct State
-    {
-        bax::ChannelSettings a, b;
-        bool engagedA = true, engagedB = true, midSide = false, linked = false;
-        double outputDb = 0.0, sampleRate = 48000.0;
-        bool operator== (const State&) const;
-    };
-
-    void setState (const State&);
-    void paint (juce::Graphics&) override;
-
-private:
-    State state;
-    bool hasState = false;
-    bax::DesignTable table;   // rebuilt only when the sample rate changes
-};
-
-//==============================================================================
-/** Small vertical output meter (dBFS, -48 .. +6). */
-class LevelMeter : public juce::Component
-{
-public:
-    void setLevel (float linearPeak);
-    void paint (juce::Graphics&) override;
-
-private:
-    float levelDb = -100.0f;
-};
-
-//==============================================================================
-/** Round "?" button in the bottom bar. */
-class HelpButton : public juce::Button
-{
-public:
-    HelpButton() : juce::Button ("help") {}
+    LedButton (juce::RangedAudioParameter&, float onValue, const juce::String& tooltip);
+    ~LedButton() override;
     void paintButton (juce::Graphics&, bool isHighlighted, bool isDown) override;
+
+private:
+    juce::ParameterAttachment attachment;
+    float onValue;
 };
 
-/** Quick reference shown over the editor; click anywhere to close. */
-class HelpOverlay : public juce::Component
+//==============================================================================
+/** Top-bar text menu, drawn as "TITLE ▼ VALUE". Click to open the menu. */
+class MenuLabel : public juce::Component,
+                  public juce::SettableTooltipClient
 {
 public:
+    explicit MenuLabel (const juce::String& title);
+
+    std::function<juce::String()> getValueText;          // shown after the arrow (may be empty)
+    std::function<void (juce::PopupMenu&)> buildMenu;     // fill the menu (items carry their own actions)
+
+    void refresh();
     void paint (juce::Graphics&) override;
-    void mouseDown (const juce::MouseEvent&) override { setVisible (false); }
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseEnter (const juce::MouseEvent&) override  { hover = true; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override   { hover = false; repaint(); }
+
+private:
+    juce::String title, value;
+    bool hover = false;
+};
+
+//==============================================================================
+/** Top-bar pill toggle attached to a bool parameter (BYPASS). */
+class PillToggle : public juce::Button
+{
+public:
+    PillToggle (juce::RangedAudioParameter&, const juce::String& text, const juce::String& tooltip);
+    ~PillToggle() override;
+    void paintButton (juce::Graphics&, bool isHighlighted, bool isDown) override;
+
+private:
+    juce::ParameterAttachment attachment;
+};
+
+//==============================================================================
+/** "LR  M  S  Δ" listening selector attached to the Monitor parameter. */
+class MonitorSelector : public juce::Component,
+                        public juce::SettableTooltipClient
+{
+public:
+    explicit MonitorSelector (juce::RangedAudioParameter&);
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override   { hoverIndex = -1; repaint(); }
+
+private:
+    int indexAt (juce::Point<float>) const;
+    juce::Rectangle<float> segment (int i) const;
+
+    juce::ParameterAttachment attachment;
+    int selected = 0, hoverIndex = -1;
 };

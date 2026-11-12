@@ -129,6 +129,7 @@ public:
         const double engTargetA = current.engagedA ? 1.0 : 0.0;
         const double engTargetB = current.engagedB ? 1.0 : 0.0;
         const double gateL = gateTargetL (current), gateR = gateTargetR (current);
+        const Monitor monitor = current.monitor;
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -184,8 +185,19 @@ public:
 
             // --- true bypass (latency-aligned dry) ----------------------------------
             const double dl = dry[0].process (inL), dr = dry[1].process (inR);
-            left[i]  = dl + bypassL * (pl - dl);
-            right[i] = dr + bypassR * (pr - dr);
+            double ol = dl + bypassL * (pl - dl);
+            double orr = dr + bypassR * (pr - dr);
+
+            // --- monitoring -----------------------------------------------------------
+            switch (monitor)
+            {
+                case Monitor::LR:    break;
+                case Monitor::Mid:   ol = orr = 0.5 * (ol + orr); break;
+                case Monitor::Side:  ol = orr = 0.5 * (ol - orr); break;
+                case Monitor::Delta: ol -= dl; orr -= dr; break;
+            }
+            left[i]  = ol;
+            right[i] = orr;
         }
     }
 
@@ -221,8 +233,8 @@ private:
     // In L/R mode each output channel is truly bypassed with its own Engage switch.
     // In M/S mode both outputs stay in circuit while either channel is engaged
     // (a disengaged M or S channel bypasses only its EQ).
-    static double gateTargetL (const EngineSettings& s) { return (s.midSide ? (s.engagedA || s.engagedB) : s.engagedA) ? 1.0 : 0.0; }
-    static double gateTargetR (const EngineSettings& s) { return (s.midSide ? (s.engagedA || s.engagedB) : s.engagedB) ? 1.0 : 0.0; }
+    static double gateTargetL (const EngineSettings& s) { return ! s.bypass && (s.midSide ? (s.engagedA || s.engagedB) : s.engagedA) ? 1.0 : 0.0; }
+    static double gateTargetR (const EngineSettings& s) { return ! s.bypass && (s.midSide ? (s.engagedA || s.engagedB) : s.engagedB) ? 1.0 : 0.0; }
 
     static inline double ramp (double v, double target, double step) noexcept
     {

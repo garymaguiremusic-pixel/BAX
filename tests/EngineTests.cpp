@@ -315,6 +315,40 @@ static void testChannelsAndMidSide()
     check (e < 1.0e-12, "side EQ has no effect on mono input in M/S mode");
 }
 
+static void testBypassAndMonitor()
+{
+    std::printf ("[9] Global bypass and LR / M / S / Delta monitoring\n");
+    const double fs = 48000.0;
+    auto inL = noise (48000, 0.05, 11), inR = noise (48000, 0.05, 12);
+    EngineSettings s;
+    s.a.lsGainDb = 4.0; s.b.hsGainDb = -3.0;
+
+    EngineSettings byp = s; byp.bypass = true;
+    std::vector<double> r;
+    auto l = render (fs, byp, inL, inR, r, 512);
+    double e = 0.0;
+    for (size_t i = 20000; i < l.size(); ++i)
+        e = std::max ({ e, std::abs (l[i] - inL[i - BaxEngine::kLatency]), std::abs (r[i] - inR[i - BaxEngine::kLatency]) });
+    check (e == 0.0, "global Bypass = bit-exact delayed input");
+
+    std::vector<double> nr, mr, sr, dr;
+    auto nl = render (fs, s, inL, inR, nr, 512);
+    EngineSettings m = s; m.monitor = Monitor::Mid;
+    auto ml = render (fs, m, inL, inR, mr, 512);
+    EngineSettings sd = s; sd.monitor = Monitor::Side;
+    auto sl = render (fs, sd, inL, inR, sr, 512);
+    EngineSettings d = s; d.monitor = Monitor::Delta;
+    auto dl = render (fs, d, inL, inR, dr, 512);
+    double em = 0.0, es = 0.0, ed = 0.0;
+    for (size_t i = BaxEngine::kLatency; i < nl.size(); ++i)
+    {
+        em = std::max ({ em, std::abs (ml[i] - 0.5 * (nl[i] + nr[i])), std::abs (mr[i] - ml[i]) });
+        es = std::max ({ es, std::abs (sl[i] - 0.5 * (nl[i] - nr[i])), std::abs (sr[i] - sl[i]) });
+        ed = std::max ({ ed, std::abs (dl[i] - (nl[i] - inL[i - BaxEngine::kLatency])), std::abs (dr[i] - (nr[i] - inR[i - BaxEngine::kLatency])) });
+    }
+    check (em < 1.0e-15 && es < 1.0e-15 && ed < 1.0e-15, "Mid / Side / Delta monitoring");
+}
+
 static void testSilence()
 {
     std::printf ("[8] Silent input gives silent output (no noise floor)\n");
@@ -335,6 +369,7 @@ int main()
     testTransitions();
     testChannelsAndMidSide();
     testSilence();
+    testBypassAndMonitor();
     std::printf ("\n%d checks, %d failed\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

@@ -33,7 +33,8 @@ static void testParameters (BaxAudioProcessor& p)
     };
 
     const auto& params = p.getParameters();
-    check (params.size() == 21, "21 parameters (19 + Oversampling + View), got " + String (params.size()));
+    check (params.size() == 23, "23 parameters (19 + Oversampling, View, Monitor, Bypass), got " + String (params.size()));
+    check (p.getBypassParameter() == p.apvts.getParameter (bax::ParamIDs::bypass), "Bypass is the host bypass parameter");
     for (int i = 0; i < (int) std::size (expected); ++i)
     {
         auto* param = params[i];
@@ -51,10 +52,11 @@ static void testParameters (BaxAudioProcessor& p)
     for (int d = 0; d < bax::kNumDetents; ++d)
         row << hp->getText ((float) d / 7.0f, 32) << (d < 7 ? ", " : "");
     std::printf ("      HP detents: %s\n", row.toRawUTF8());
-    check (hp->getText (0.0f, 32) == "Off" && hp->getText (1.0f, 32) == "120 Hz", "HP detent labels");
-    check (p.apvts.getParameter (bax::ParamIDs::lsFreqL)->getText (0.5f, 32) == "230 Hz", "LS default shows 230 Hz");
+    check (hp->getText (0.0f, 32) == "Out" && hp->getText (1.0f, 32) == "54 Hz", "HP detent labels");
+    check (p.apvts.getParameter (bax::ParamIDs::lsFreqL)->getText (0.5f, 32) == "131 Hz", "LS default shows 131 Hz");
+    check (p.apvts.getParameter (bax::ParamIDs::hsFreqL)->getText (1.0f / 7.0f, 32) == "7.1 kHz", "HS detent 1 shows 7.1 kHz");
     check (p.apvts.getParameter (bax::ParamIDs::lsGainL)->getText (0.75f, 32) == "+2.5 dB", "gain text +2.5 dB");
-    check (std::abs (p.apvts.getParameter (bax::ParamIDs::lpL)->getValueForText ("35 kHz") - 3.0f / 7.0f) < 1.0e-6f, "LP text -> value");
+    check (std::abs (p.apvts.getParameter (bax::ParamIDs::lpL)->getValueForText ("18 kHz") - 3.0f / 7.0f) < 1.0e-6f, "LP text -> value");
 }
 
 static double rms (const AudioBuffer<float>& b, int ch)
@@ -154,17 +156,27 @@ static void testStateAndPresets (BaxAudioProcessor& p)
 
 static void testEditor (BaxAudioProcessor& p, const File& outDir)
 {
-    std::printf ("[5] Editor: every view, resizing, PNG renders\n");
+    std::printf ("[5] Editor: views, window sizes, link behaviour, PNG renders\n");
+    auto setParam = [&] (const char* id, float plain)
+    {
+        auto* prm = p.apvts.getParameter (id);
+        prm->setValueNotifyingHost (prm->convertTo0to1 (plain));
+    };
+    auto plain = [&] (const char* id) { return p.apvts.getRawParameterValue (id)->load(); };
+    auto pump = [] { for (int i = 0; i < 4; ++i) MessageManager::getInstance()->runDispatchLoopUntil (40); };
+
+    p.setCurrentProgram (0);
+    setParam (bax::ParamIDs::view, 1.0f);   // Classic Exp (default)
     std::unique_ptr<AudioProcessorEditor> editor (p.createEditor());
     check (editor != nullptr, "editor created");
-    check (editor->getWidth() == 760 && editor->getHeight() == 446, "default size 760 x 446");
     check (editor->isResizable(), "editor is resizable");
+    pump();
+    check (editor->getWidth() == 1200 && editor->getHeight() == 288, "Classic Exp: 1200 x 288, got "
+           + String (editor->getWidth()) + " x " + String (editor->getHeight()));
 
     auto snap = [&] (const String& name)
     {
-        // let the editor's timer pick up the state, then render
-        for (int i = 0; i < 3; ++i)
-            MessageManager::getInstance()->runDispatchLoopUntil (40);
+        pump();
         auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
         if (outDir.getFullPathName().isNotEmpty())
         {
@@ -174,34 +186,47 @@ static void testEditor (BaxAudioProcessor& p, const File& outDir)
             PNGImageFormat().writeImageToStream (img, os);
             std::printf ("      wrote %s\n", f.getFullPathName().toRawUTF8());
         }
-        return img;
     };
 
-    auto setParam = [&] (const char* id, float plain)
-    {
-        auto* prm = p.apvts.getParameter (id);
-        prm->setValueNotifyingHost (prm->convertTo0to1 (plain));
-    };
-
-    p.setCurrentProgram (4);   // Drum Hype
-    setParam (bax::ParamIDs::view, 2.0f);
-    snap ("baxr_dual_mono");
-
-    p.setCurrentProgram (5);   // Drum MS (M/S, unlinked)
-    snap ("baxr_drum_ms");
-
-    p.setCurrentProgram (10);  // Vocal Sheen
-    setParam (bax::ParamIDs::view, 1.0f);
+    p.setCurrentProgram (10);   // Vocal Sheen
     snap ("baxr_classic_exp");
+
     setParam (bax::ParamIDs::view, 0.0f);
+    pump();
+    check (editor->getWidth() == 1200 && editor->getHeight() == 158, "Classic: 1200 x 158");
     snap ("baxr_classic");
 
-    editor->setSize (760 * 3 / 2, 446 * 3 / 2);
-    check (std::abs (editor->getWidth() - 1140) <= 1, "editor scales to 150 %");
-    check (p.editorWidth.load() == editor->getWidth(), "editor size is remembered");
     setParam (bax::ParamIDs::view, 2.0f);
+    pump();
+    check (editor->getWidth() == 1200 && editor->getHeight() == 418, "Dual Mono: 1200 x 418");
+    p.setCurrentProgram (5);    // Drum MS
+    snap ("baxr_dual_mono_ms");
+
+    // Classic views: right frequency selectors and Engage follow the left ones
+    p.setCurrentProgram (0);
+    setParam (bax::ParamIDs::view, 1.0f);
+    pump();
+    setParam (bax::ParamIDs::hpL, 5.0f / 7.0f);
+    setParam (bax::ParamIDs::lsGainL, 3.0f);
+    pump();
+    check (std::abs (plain (bax::ParamIDs::hpR) - 5.0f / 7.0f) < 1.0e-5f, "Classic: right HP follows left");
+    check (std::abs (plain (bax::ParamIDs::lsGainR)) < 1.0e-5f, "Classic, link off: right level stays independent");
+    setParam (bax::ParamIDs::link, 1.0f);
+    pump();
+    check (std::abs (plain (bax::ParamIDs::lsGainR) - 3.0f) < 1.0e-5f, "Classic, link on: right level follows left");
+    setParam (bax::ParamIDs::hsGainR, -2.0f);   // moving the right one moves the left too
+    pump();
+    check (std::abs (plain (bax::ParamIDs::hsGainL) + 2.0f) < 1.0e-5f, "link on: moving right moves left");
+    setParam (bax::ParamIDs::link, 0.0f);
+
+    // SIZE / resizing keeps the aspect ratio and is remembered
+    editor->setSize (1800, 432);
+    pump();
+    check (std::abs (editor->getWidth() - 1800) <= 2 && std::abs (editor->getHeight() - 432) <= 2, "scales to 150 %");
+    check (std::abs (p.editorScale.load() - 1.5f) < 0.01f, "scale is remembered");
     snap ("baxr_150pct");
     editor.reset();
+    p.editorScale.store (1.0f);
 }
 
 int main (int argc, char** argv)

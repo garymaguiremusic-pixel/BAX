@@ -24,6 +24,9 @@ BaxAudioProcessor::BaxAudioProcessor()
     pLink         = apvts.getRawParameterValue (ParamIDs::link);
     pOversampling = apvts.getRawParameterValue (ParamIDs::oversampling);
     pView         = apvts.getRawParameterValue (ParamIDs::view);
+    pMonitor      = apvts.getRawParameterValue (ParamIDs::monitor);
+    pBypass       = apvts.getRawParameterValue (ParamIDs::bypass);
+    bypassParam   = apvts.getParameter (ParamIDs::bypass);
 
     // One latency for every rate and oversampling factor, so it never changes.
     setLatencySamples (BaxEngine::kLatency);
@@ -35,9 +38,9 @@ View BaxAudioProcessor::getView() const
     return (View) juce::jlimit (0, 2, (int) pView->load());
 }
 
-bool BaxAudioProcessor::isLinked() const
+bool BaxAudioProcessor::isLinkOn() const
 {
-    return getView() != View::DualMono || pLink->load() > 0.5f;
+    return pLink->load() > 0.5f;
 }
 
 EngineSettings BaxAudioProcessor::readSettings() const
@@ -54,15 +57,32 @@ EngineSettings BaxAudioProcessor::readSettings() const
         return s;
     };
 
+    // Classic / Classic Exp: one set of frequency selectors and one Engage switch (the
+    // left ones) drive both channels; the low / high levels stay per channel unless
+    // Stereo link is on. Dual Mono: everything per channel; Stereo link copies the
+    // whole left channel to the right.
     EngineSettings s;
-    const bool linked = isLinked();
+    const bool link = isLinkOn();
     s.a = readChannel (ch[0]);
-    s.b = linked ? s.a : readChannel (ch[1]);
+    s.b = readChannel (ch[1]);
     s.engagedA = ch[0].engage->load() < 0.5f;                       // choice 0 = On
-    s.engagedB = (linked ? ch[0].engage : ch[1].engage)->load() < 0.5f;
+    s.engagedB = ch[1].engage->load() < 0.5f;
+    if (getView() != View::DualMono)
+    {
+        s.b.hp = s.a.hp; s.b.lsFreq = s.a.lsFreq; s.b.hsFreq = s.a.hsFreq; s.b.lp = s.a.lp;
+        s.engagedB = s.engagedA;
+        if (link) { s.b.lsGainDb = s.a.lsGainDb; s.b.hsGainDb = s.a.hsGainDb; }
+    }
+    else if (link)
+    {
+        s.b = s.a;
+        s.engagedB = s.engagedA;
+    }
     s.midSide = pMidSide->load() > 0.5f;
     s.oversampling = (Oversampling) juce::jlimit (0, 2, (int) pOversampling->load());
     s.outputDb = pOutput->load();
+    s.bypass = pBypass->load() > 0.5f;
+    s.monitor = (Monitor) juce::jlimit (0, 3, (int) pMonitor->load());
     return s;
 }
 
@@ -104,7 +124,6 @@ void BaxAudioProcessor::processInternal (juce::AudioBuffer<Sample>& buffer)
 
     engine.setSettings (readSettings());
 
-    float peak[2] = { 0.0f, 0.0f };
     for (int pos = 0; pos < n; pos += kChunk)
     {
         const int len = std::min (kChunk, n - pos);
@@ -117,20 +136,9 @@ void BaxAudioProcessor::processInternal (juce::AudioBuffer<Sample>& buffer)
         for (int i = 0; i < len; ++i)
         {
             outL[pos + i] = (Sample) scratchL[i];
-            peak[0] = std::max (peak[0], (float) std::abs (scratchL[i]));
-            if (outR != nullptr)
-            {
-                outR[pos + i] = (Sample) scratchR[i];
-                peak[1] = std::max (peak[1], (float) std::abs (scratchR[i]));
-            }
+            if (outR != nullptr) outR[pos + i] = (Sample) scratchR[i];
         }
     }
-    if (outR == nullptr) peak[1] = peak[0];
-
-    // meter ballistics: instant attack, ~20 dB/s release at a 60 Hz-ish editor rate
-    const float decay = (float) std::pow (0.1, (double) n / (getSampleRate() > 0.0 ? getSampleRate() : 48000.0));
-    for (int c = 0; c < 2; ++c)
-        outputPeak[c].store (std::max (peak[c], outputPeak[c].load() * decay));
 }
 
 template <typename Sample>
@@ -204,7 +212,9 @@ void BaxAudioProcessor::setCurrentProgram (int index)
     setParameterValue (ParamIDs::midSide, p.midSide ? 1.0f : 0.0f);
     setParameterValue (ParamIDs::link, p.link ? 1.0f : 0.0f);
     setParameterValue (ParamIDs::oversampling, (float) p.oversampling);
-    if (! p.link)   // two different channels need the Dual Mono view
+    // channels with different frequency settings need the Dual Mono view
+    if (! sameValue (p.a.hp, p.b.hp) || ! sameValue (p.a.lsFreq, p.b.lsFreq)
+        || ! sameValue (p.a.hsFreq, p.b.hsFreq) || ! sameValue (p.a.lp, p.b.lp))
         setParameterValue (ParamIDs::view, (float) View::DualMono);
 }
 
@@ -213,7 +223,7 @@ void BaxAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("program", currentProgram.load(), nullptr);
-    state.setProperty ("editorWidth", editorWidth.load(), nullptr);
+    state.setProperty ("editorScale", editorScale.load(), nullptr);
     if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -225,7 +235,7 @@ void BaxAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             auto state = juce::ValueTree::fromXml (*xml);
             currentProgram.store (juce::jlimit (0, numFactoryPresets - 1, (int) state.getProperty ("program", 0)));
-            editorWidth.store ((int) state.getProperty ("editorWidth", 0));
+            editorScale.store ((float) (double) state.getProperty ("editorScale", 1.0));
             apvts.replaceState (state);
         }
 }

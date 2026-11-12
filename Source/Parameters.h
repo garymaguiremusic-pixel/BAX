@@ -30,6 +30,8 @@ namespace ParamIDs
     inline constexpr const char* link    = "Stereo_link";
     inline constexpr const char* oversampling = "Oversampling";
     inline constexpr const char* view    = "View";
+    inline constexpr const char* monitor = "Monitor";
+    inline constexpr const char* bypass  = "Bypass";
 }
 
 /** The six EQ parameter IDs of one channel. */
@@ -44,6 +46,7 @@ enum class View { Classic = 0, ClassicExp = 1, DualMono = 2 };
 
 inline juce::StringArray oversamplingNames() { return { "1X", "2X", "4X" }; }
 inline juce::StringArray viewNames()         { return { "Classic", "Classic Exp", "Dual Mono" }; }
+inline juce::StringArray monitorNames()      { return { "LR", "M", "S", "Delta" }; }
 
 //==============================================================================
 // Display strings
@@ -73,13 +76,15 @@ inline const double* freqTable (FreqKind k)
 inline juce::String detentText (FreqKind k, int detent)
 {
     const double hz = freqTable (k)[juce::jlimit (0, kNumDetents - 1, detent)];
-    return hz <= 0.0 ? juce::String ("Off") : formatFrequency (hz);
+    return hz <= 0.0 ? juce::String ("Out") : formatFrequency (hz);
 }
 
 inline juce::String formatGain (double db)
 {
     if (std::abs (db) < 0.005) return "0.0 dB";
-    return (db > 0.0 ? "+" : "") + juce::String (db, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + " dB";
+    auto t = juce::String (db, 2);
+    if (t.endsWithChar ('0')) t = t.dropLastCharacters (1);   // "+2.50" -> "+2.5", "+2.25" stays
+    return (db > 0.0 ? "+" : "") + t + " dB";
 }
 
 inline juce::String formatGainShort (double db)
@@ -97,7 +102,7 @@ inline std::unique_ptr<juce::AudioParameterFloat> makeFrequencyParam (const char
     auto fromText = [kind] (const juce::String& t)
     {
         const auto s = t.trim().toLowerCase();
-        if (s.startsWith ("off")) return 0.0f;
+        if (s.startsWith ("off") || s.startsWith ("out")) return 0.0f;
         double hz = s.getDoubleValue();
         if (s.contains ("k")) hz *= 1000.0;
         const double* table = freqTable (kind);
@@ -166,7 +171,9 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (choice (ParamIDs::link,    "Stereo_link",         { "Off", "On" }, 0));
     // menus
     layout.add (choice (ParamIDs::oversampling, "Oversampling", oversamplingNames(), 0, false));
-    layout.add (choice (ParamIDs::view,         "View",         viewNames(),         2, false));
+    layout.add (choice (ParamIDs::view,         "View",         viewNames(),         1, false));
+    layout.add (choice (ParamIDs::monitor,      "Monitor",      monitorNames(),      0, false));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bypass, 1 }, "Bypass", false));
     return layout;
 }
 

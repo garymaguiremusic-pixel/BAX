@@ -6,12 +6,12 @@ using namespace juce;
 //==============================================================================
 // BaxKnob
 //==============================================================================
-BaxKnob::BaxKnob (Size s, const String& labelText)
-    : Slider (Slider::RotaryVerticalDrag, Slider::NoTextBox), knobSize (s), label (labelText)
+BaxKnob::BaxKnob (Size s, const String& name)
+    : Slider (Slider::RotaryVerticalDrag, Slider::NoTextBox), knobSize (s)
 {
     setRange (0.0, 1.0, 0.0);
     setRotaryParameters (MathConstants<float>::pi * 1.25f, MathConstants<float>::pi * 2.75f, true);
-    setName (labelText);
+    setName (name);
 }
 
 String BaxKnob::valueText() const
@@ -21,38 +21,39 @@ String BaxKnob::valueText() const
 
 String BaxKnob::getTooltip()
 {
-    String text = label.toUpperCase() + "  " + valueText();
-    if (! isEnabled() && inactiveHint.isNotEmpty())
-        text << "\n" << inactiveHint;
-    return text;
+    return getName().toUpperCase() + "  " + valueText();
 }
 
 void BaxKnob::paint (Graphics& g)
 {
     auto bounds = getLocalBounds().toFloat();
+    auto bubble = bounds.removeFromBottom ((float) kBubbleHeight);
+    const float side = std::min (bounds.getWidth(), bounds.getHeight());
+    const auto knobArea = bounds.withSizeKeepingCentre (side, side);
+
     float pos = (float) valueToProportionOfLength (getValue());
     if (numDetents > 1)   // draw the pointer on the detent actually in use
         pos = (float) bax::detentFromNormalised (pos) / (float) (numDetents - 1);
     const auto rotary = getRotaryParameters();
 
-    auto labelArea = bounds.removeFromBottom (14.0f);
-    const float side = std::min (bounds.getWidth(), bounds.getHeight());
-    const auto knobArea = bounds.withSizeKeepingCentre (side, side);
-
-    if ((hovering || dragging) && isEnabled())
-    {
-        g.setFont (CustomLookAndFeel::uiFont (11.0f, true));
-        g.setColour (BaxColours::blue);
-        g.drawFittedText (valueText(), labelArea.toNearestInt(), Justification::centred, 1, 0.7f);
-    }
-    else
-    {
-        CustomLookAndFeel::drawSmallLabel (g, label, labelArea);
-    }
-
     getLookAndFeel().drawRotarySlider (g, (int) knobArea.getX(), (int) knobArea.getY(),
                                        (int) knobArea.getWidth(), (int) knobArea.getHeight(),
                                        pos, rotary.startAngleRadians, rotary.endAngleRadians, *this);
+
+    if ((hovering || dragging) && isEnabled())
+    {
+        const auto text = valueText();
+        const auto font = CustomLookAndFeel::uiFont (11.0f, true);
+        const float w = std::min (bubble.getWidth(), GlyphArrangement::getStringWidth (font, text) + 12.0f);
+        auto pill = bubble.withSizeKeepingCentre (w, (float) kBubbleHeight - 1.0f);
+        g.setColour (Colour (0xf0101418));
+        g.fillRoundedRectangle (pill, 3.0f);
+        g.setColour (BaxColours::blue.withAlpha (0.7f));
+        g.drawRoundedRectangle (pill.reduced (0.5f), 3.0f, 1.0f);
+        g.setFont (font);
+        g.setColour (Colours::white);
+        g.drawFittedText (text, pill.toNearestInt(), Justification::centred, 1, 0.7f);
+    }
 }
 
 double BaxKnob::snap (double v, bool fine) const
@@ -132,9 +133,8 @@ void BaxKnob::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& whee
 
     const bool fine = e.mods.isShiftDown();
     const double step = fine ? fineStep : coarseStep;
-    // from a value between steps (e.g. the 0.5 shelf default) go to the neighbouring step
     double base = getValue();
-    if (numDetents > 1)
+    if (numDetents > 1)   // from a value between detents (e.g. 0.5) go to the neighbouring one
         base = (double) bax::detentFromNormalised (base) / (double) (numDetents - 1);
     setValueWithGesture (snap (base + (dir > 0.0f ? step : -step), fine));
 }
@@ -153,7 +153,7 @@ KnobAttachment::KnobAttachment (RangedAudioParameter& p, BaxKnob& k)
     knob.setRange (range.start, range.end, 0.0);
     knob.setDefaultValue (p.convertFrom0to1 (p.getDefaultValue()));
     if (! knob.displayValue)
-        knob.displayValue = [&p] (double v) { return p.getText (p.convertTo0to1 ((float) v), 32); };
+        knob.displayValue = [param = &p] (double v) { return param->getText (param->convertTo0to1 ((float) v), 32); };
 
     knob.onGestureBegin = [this] { attachment.beginGesture(); };
     knob.onGestureEnd   = [this] { attachment.endGesture(); };
@@ -170,236 +170,210 @@ KnobAttachment::~KnobAttachment()
 }
 
 //==============================================================================
-// LcdDisplay
+// LedButton
 //==============================================================================
-void LcdDisplay::setContent (const String& name, const String& value)
+LedButton::LedButton (RangedAudioParameter& p, float on, const String& tooltip)
+    : Button (p.getName (32)),
+      attachment (p, [this] (float v)
+      {
+          setToggleState (std::abs (v - onValue) < 0.5f, dontSendNotification);
+          repaint();
+      }),
+      onValue (on)
 {
-    if (name != nameText || value != valueText)
+    setTooltip (tooltip);
+    const float offValue = std::abs (on) < 0.5f ? p.getNormalisableRange().end : 0.0f;
+    onClick = [this, offValue]
     {
-        nameText = name;
-        valueText = value;
+        attachment.setValueAsCompleteGesture (getToggleState() ? offValue : onValue);
+    };
+    attachment.sendInitialUpdate();
+}
+
+LedButton::~LedButton() { onClick = nullptr; }
+
+void LedButton::paintButton (Graphics& g, bool isHighlighted, bool isDown)
+{
+    const auto b = getLocalBounds().toFloat();
+    const float d = std::min (b.getWidth(), b.getHeight()) - 4.0f;
+    const auto bezel = Rectangle<float> (d, d).withCentre (b.getCentre());
+
+    // chrome bezel
+    Path ring;
+    ring.addEllipse (bezel);
+    DropShadow (Colours::black.withAlpha (0.7f), 6, { 0, 2 }).drawForPath (g, ring);
+    g.setGradientFill (ColourGradient (Colour (0xffe7eaed), bezel.getX(), bezel.getY(),
+                                       Colour (0xff5d646b), bezel.getRight(), bezel.getBottom(), false));
+    g.fillEllipse (bezel);
+
+    // black cap
+    const auto cap = bezel.reduced (d * 0.12f);
+    g.setGradientFill (ColourGradient (isHighlighted ? Colour (0xff3a3f45) : Colour (0xff2c3035), cap.getCentreX(), cap.getY(),
+                                       Colour (0xff0d0f11), cap.getCentreX(), cap.getBottom(), false));
+    g.fillEllipse (isDown ? cap.reduced (0.6f) : cap);
+    g.setColour (Colours::black);
+    g.drawEllipse (cap, 0.8f);
+
+    // LED
+    const auto led = cap.withSizeKeepingCentre (d * 0.38f, d * 0.38f);
+    if (getToggleState())
+    {
+        g.setColour (BaxColours::blueGlow.withAlpha (0.35f));
+        g.fillEllipse (led.expanded (d * 0.12f));
+        g.setGradientFill (ColourGradient (Colour (0xffd8eeff), led.getCentreX(), led.getY(),
+                                           BaxColours::blue, led.getCentreX(), led.getBottom(), false));
+    }
+    else
+    {
+        g.setGradientFill (ColourGradient (Colour (0xff2a3542), led.getCentreX(), led.getY(),
+                                           Colour (0xff10161d), led.getCentreX(), led.getBottom(), false));
+    }
+    g.fillEllipse (led);
+    g.setColour (Colours::black.withAlpha (0.8f));
+    g.drawEllipse (led, 0.8f);
+    g.setColour (Colours::white.withAlpha (getToggleState() ? 0.7f : 0.15f));
+    g.fillEllipse (led.reduced (led.getWidth() * 0.3f).translated (-led.getWidth() * 0.12f, -led.getHeight() * 0.14f));
+}
+
+//==============================================================================
+// MenuLabel
+//==============================================================================
+MenuLabel::MenuLabel (const String& t) : title (t)
+{
+    setMouseCursor (MouseCursor::PointingHandCursor);
+}
+
+void MenuLabel::refresh()
+{
+    const auto v = getValueText ? getValueText() : String();
+    if (v != value)
+    {
+        value = v;
         repaint();
     }
 }
 
-void LcdDisplay::setDimmed (bool shouldDim)
+void MenuLabel::paint (Graphics& g)
 {
-    if (dimmed != shouldDim)
-    {
-        dimmed = shouldDim;
-        repaint();
-    }
-}
-
-void LcdDisplay::paint (Graphics& g)
-{
-    auto b = getLocalBounds().toFloat().reduced (1.0f);
-    CustomLookAndFeel::drawLcd (g, b, dimmed);
-
-    const auto textColour = dimmed ? Colour (0xff8a9097) : Colours::white;
-    auto textArea = b.reduced (6.0f, 0.0f);
-    const auto font = CustomLookAndFeel::uiFont (11.0f, true);
+    const auto b = getLocalBounds().toFloat();
+    const auto font = CustomLookAndFeel::uiFont (12.0f, true);
     g.setFont (font);
 
-    const float valueWidth = GlyphArrangement::getStringWidth (font, valueText) + 4.0f;
-    auto nameArea = textArea.withTrimmedRight (valueWidth).toNearestInt();
+    const float titleW = GlyphArrangement::getStringWidth (font, title);
+    auto area = b;
+    g.setColour (hover ? Colours::white : Colour (0xffdfe3e6));
+    g.drawText (title, area.removeFromLeft (titleW + 2.0f), Justification::centredLeft);
 
-    g.setColour (Colours::black.withAlpha (0.35f));
-    g.drawFittedText (nameText, nameArea.translated (0, 1), Justification::centredLeft, 1, 0.75f);
-    g.drawText (valueText, textArea.translated (0.0f, 1.0f), Justification::centredRight);
-    g.setColour (textColour);
-    g.drawFittedText (nameText, nameArea, Justification::centredLeft, 1, 0.75f);
-    g.drawText (valueText, textArea, Justification::centredRight);
-}
+    // arrow
+    const float ax = area.getX() + 6.0f, ay = b.getCentreY();
+    Path arrow;
+    arrow.addTriangle (ax - 4.0f, ay - 2.5f, ax + 4.0f, ay - 2.5f, ax, ay + 3.0f);
+    g.fillPath (arrow);
+    area.removeFromLeft (14.0f);
 
-//==============================================================================
-// ResponseGraph
-//==============================================================================
-bool ResponseGraph::State::operator== (const State& o) const
-{
-    auto same = [] (const bax::ChannelSettings& x, const bax::ChannelSettings& y)
+    if (value.isNotEmpty())
     {
-        return x.sameDetents (y) && bax::sameValue (x.lsGainDb, y.lsGainDb) && bax::sameValue (x.hsGainDb, y.hsGainDb);
-    };
-    return same (a, o.a) && same (b, o.b) && engagedA == o.engagedA && engagedB == o.engagedB
-        && midSide == o.midSide && linked == o.linked && bax::sameValue (outputDb, o.outputDb)
-        && bax::sameValue (sampleRate, o.sampleRate);
+        g.setColour (BaxColours::blue);
+        g.drawFittedText (value.toUpperCase(), area.toNearestInt(), Justification::centredLeft, 1, 0.8f);
+    }
 }
 
-void ResponseGraph::setState (const State& s)
+void MenuLabel::mouseDown (const MouseEvent&)
 {
-    if (hasState && s == state)
+    if (! buildMenu)
         return;
-    state = s;
-    hasState = true;
-    table.build (state.sampleRate);
-    repaint();
+    PopupMenu menu;
+    buildMenu (menu);
+    menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this));
 }
 
-void ResponseGraph::paint (Graphics& g)
+//==============================================================================
+// PillToggle
+//==============================================================================
+PillToggle::PillToggle (RangedAudioParameter& p, const String& buttonText, const String& tooltip)
+    : Button (buttonText),
+      attachment (p, [this] (float v) { setToggleState (v > 0.5f, dontSendNotification); repaint(); })
+{
+    setTooltip (tooltip);
+    onClick = [this] { attachment.setValueAsCompleteGesture (getToggleState() ? 0.0f : 1.0f); };
+    attachment.sendInitialUpdate();
+}
+
+PillToggle::~PillToggle() { onClick = nullptr; }
+
+void PillToggle::paintButton (Graphics& g, bool isHighlighted, bool)
 {
     auto b = getLocalBounds().toFloat().reduced (1.0f);
-    CustomLookAndFeel::drawLcd (g, b, false);
-    auto plot = b.reduced (8.0f, 6.0f).withTrimmedLeft (18.0f).withTrimmedBottom (10.0f);
-
-    constexpr double fMin = 20.0, fMax = 20000.0, dbRange = 9.0;
-    auto xOf = [&] (double f) { return plot.getX() + plot.getWidth() * (float) (std::log (f / fMin) / std::log (fMax / fMin)); };
-    auto yOf = [&] (double db) { return plot.getCentreY() - plot.getHeight() * 0.5f * (float) (jlimit (-dbRange, dbRange, db) / dbRange); };
-
-    // grid
-    g.setFont (CustomLookAndFeel::uiFont (9.0f, true));
-    for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
+    const float r = b.getHeight() * 0.5f;
+    if (getToggleState())
     {
-        const float x = xOf (f);
-        g.setColour (Colours::white.withAlpha (bax::sameValue (f, 100.0) || bax::sameValue (f, 1000.0) || bax::sameValue (f, 10000.0) ? 0.16f : 0.08f));
-        g.drawVerticalLine ((int) x, plot.getY(), plot.getBottom());
-        g.setColour (Colours::white.withAlpha (0.55f));
-        const String label = f >= 1000.0 ? String ((int) (f / 1000.0)) + "k" : String ((int) f);
-        g.drawText (label, Rectangle<float> (x - 15.0f, plot.getBottom() + 1.0f, 30.0f, 10.0f), Justification::centred);
+        g.setGradientFill (ColourGradient (Colour (0xff2f86e0), 0.0f, b.getY(), Colour (0xff15508f), 0.0f, b.getBottom(), false));
+        g.fillRoundedRectangle (b, r);
     }
-    for (double db : { -8.0, -4.0, 0.0, 4.0, 8.0 })
-    {
-        const float y = yOf (db);
-        g.setColour (Colours::white.withAlpha (bax::sameValue (db, 0.0) ? 0.25f : 0.08f));
-        g.drawHorizontalLine ((int) y, plot.getX(), plot.getRight());
-        g.setColour (Colours::white.withAlpha (0.55f));
-        g.drawText (db > 0.0 ? "+" + String ((int) db) : String ((int) db), Rectangle<float> (b.getX() + 2.0f, y - 5.0f, 22.0f, 10.0f),
-                    Justification::centredRight);
-    }
-
-    if (! hasState)
-        return;
-
-    g.saveState();
-    g.reduceClipRegion (plot.expanded (0.0f, 3.0f).toNearestInt());
-
-    auto curve = [&] (const bax::ChannelSettings& s, bool engaged)
-    {
-        Path p;
-        for (int i = 0; i <= 240; ++i)
-        {
-            const double f = fMin * std::pow (fMax / fMin, i / 240.0);
-            double db = state.outputDb;
-            if (engaged) db += bax::EqChannel::responseDb (s, state.sampleRate, table, f);
-            const float x = xOf (f), y = yOf (db);
-            if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
-        }
-        return p;
-    };
-
-    const Colour colA (0xffffffff), colB (0xffffc35a);
-    auto drawCurve = [&] (const Path& p, Colour c)
-    {
-        g.setColour (c.withAlpha (0.25f));
-        g.strokePath (p, PathStrokeType (4.0f, PathStrokeType::curved, PathStrokeType::rounded));
-        g.setColour (c);
-        g.strokePath (p, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
-    };
-
-    const String nameA = state.midSide ? "MID" : "LEFT", nameB = state.midSide ? "SIDE" : "RIGHT";
-    const bool single = state.linked && state.engagedA == state.engagedB;
-    if (! single)
-        drawCurve (curve (state.b, state.engagedB), colB);
-    drawCurve (curve (state.a, state.engagedA), colA);
-    g.restoreState();
-
-    // legend
-    g.setFont (CustomLookAndFeel::uiFont (10.0f, true));
-    auto legend = Rectangle<float> (plot.getRight() - 120.0f, plot.getY() + 2.0f, 118.0f, 12.0f);
-    g.setColour (colA);
-    g.drawText (single ? nameA + " + " + nameB : nameA + (state.engagedA ? "" : " (OFF)"), legend, Justification::centredRight);
-    if (! single)
-    {
-        g.setColour (colB);
-        g.drawText (nameB + (state.engagedB ? "" : " (OFF)"), legend.translated (0.0f, 12.0f), Justification::centredRight);
-    }
+    g.setColour (getToggleState() ? BaxColours::blue : Colour (0xffb9bec3).withAlpha (isHighlighted ? 1.0f : 0.75f));
+    g.drawRoundedRectangle (b, r, 1.2f);
+    g.setColour (getToggleState() || isHighlighted ? Colours::white : Colour (0xffdfe3e6));
+    g.setFont (CustomLookAndFeel::uiFont (11.0f, true));
+    g.drawText (getButtonText().toUpperCase(), b, Justification::centred);
 }
 
 //==============================================================================
-// LevelMeter
+// MonitorSelector
 //==============================================================================
-void LevelMeter::setLevel (float linearPeak)
+MonitorSelector::MonitorSelector (RangedAudioParameter& p)
+    : attachment (p, [this] (float v) { selected = jlimit (0, 3, (int) v); repaint(); })
 {
-    const float db = linearPeak > 1.0e-6f ? 20.0f * std::log10 (linearPeak) : -100.0f;
-    if (std::abs (db - levelDb) > 0.25f)
-    {
-        levelDb = db;
-        repaint();
-    }
+    setTooltip (String::fromUTF8 ("Listen: LR = normal stereo, M = mid only, S = side only, \xce\x94 = only what the EQ adds or removes"));
+    attachment.sendInitialUpdate();
 }
 
-void LevelMeter::paint (Graphics& g)
-{
-    auto b = getLocalBounds().toFloat();
-    CustomLookAndFeel::drawInsetBox (g, b, 2.0f);
-    auto inner = b.reduced (2.0f);
-
-    constexpr float lo = -48.0f, hi = 6.0f;
-    const float norm = jlimit (0.0f, 1.0f, (levelDb - lo) / (hi - lo));
-    if (norm > 0.0f)
-    {
-        auto bar = inner.withTrimmedTop (inner.getHeight() * (1.0f - norm));
-        const float zeroY = inner.getBottom() - inner.getHeight() * (-lo / (hi - lo));
-        g.setGradientFill (ColourGradient (BaxColours::blue, 0.0f, inner.getBottom(), Colour (0xff9fd4ff), 0.0f, zeroY, false));
-        g.fillRect (bar.withTop (std::max (bar.getY(), zeroY)));
-        if (bar.getY() < zeroY)
-        {
-            g.setColour (BaxColours::red);
-            g.fillRect (bar.withBottom (zeroY));
-        }
-    }
-    // 0 dB mark
-    g.setColour (Colours::white.withAlpha (0.35f));
-    g.drawHorizontalLine ((int) (inner.getBottom() - inner.getHeight() * (-lo / (hi - lo))), inner.getX(), inner.getRight());
-}
-
-//==============================================================================
-// Help
-//==============================================================================
-void HelpButton::paintButton (Graphics& g, bool isHighlighted, bool isDown)
+Rectangle<float> MonitorSelector::segment (int i) const
 {
     auto b = getLocalBounds().toFloat().reduced (1.0f);
-    g.setColour (Colours::black.withAlpha (0.6f));
-    g.fillEllipse (b.translated (0.0f, 1.0f));
-    g.setGradientFill (ColourGradient (isHighlighted ? Colour (0xff8a9096) : Colour (0xff6f757b), 0.0f, b.getY(),
-                                       Colour (0xff35393d), 0.0f, b.getBottom(), false));
-    g.fillEllipse (isDown ? b.reduced (0.5f) : b);
-    g.setColour (BaxColours::bevelDark);
-    g.drawEllipse (b, 1.0f);
-    g.setColour (Colours::white);
-    g.setFont (CustomLookAndFeel::uiFont (12.0f, true));
-    g.drawText ("?", b, Justification::centred);
+    const float w = b.getWidth() / 4.0f;
+    return { b.getX() + w * (float) i, b.getY(), w, b.getHeight() };
 }
 
-void HelpOverlay::paint (Graphics& g)
+int MonitorSelector::indexAt (Point<float> p) const
 {
-    g.fillAll (Colours::black.withAlpha (0.72f));
+    for (int i = 0; i < 4; ++i)
+        if (segment (i).contains (p)) return i;
+    return -1;
+}
 
-    auto box = getLocalBounds().toFloat().reduced (40.0f, 30.0f);
-    CustomLookAndFeel::drawPanel (g, box, "BAXR - Quick Help");
+void MonitorSelector::paint (Graphics& g)
+{
+    auto b = getLocalBounds().toFloat().reduced (1.0f);
+    const float r = b.getHeight() * 0.5f;
+    g.setColour (Colour (0xff0b0c0e));
+    g.fillRoundedRectangle (b, r);
 
-    const char* lines[] =
+    static const char* labels[] = { "LR", "M", "S", "\xce\x94" };
+    g.setFont (CustomLookAndFeel::uiFont (11.5f, true));
+    for (int i = 0; i < 4; ++i)
     {
-        "LOW / HIGH:  broad Baxandall shelves, -5 .. +5 dB (0.5 dB steps, Shift = 0.1 dB)",
-        "LOW FREQ / HIGH FREQ:  8-position shelf frequency selectors",
-        "HP / LP:  12 dB/oct high-pass and low-pass filters, 8 positions each (first = Off)",
-        "ENGAGE:  true bypass of that channel, with a 200 ms crossfade",
-        "VIEW:  Classic = one control set for both channels.  Classic Exp = Classic plus",
-        "           the response display.  Dual Mono = independent left / right (or mid / side)",
-        "M/S:  the two channels work on Mid and Side instead of Left and Right",
-        "LINK:  in Dual Mono, the right (side) channel follows the left (mid) controls",
-        "OVERSAMPLING:  1X / 2X / 4X for the preamp stage. Latency stays at 47 samples",
-        "OUTPUT:  -10 .. +10 dB.  Meters show the output peak level per channel",
-        "Knobs: drag, Shift = fine, scroll wheel, double-click = default. Drag the corner to resize.",
-        "",
-        "Click anywhere to close."
-    };
-
-    auto text = box.reduced (16.0f, 0.0f).withTrimmedTop (30.0f);
-    g.setFont (CustomLookAndFeel::uiFont (12.0f));
-    for (auto* line : lines)
-    {
-        g.setColour (String (line).startsWith ("Click") ? BaxColours::blue : Colour (0xffdfe3e6));
-        g.drawFittedText (line, text.removeFromTop (21.0f).toNearestInt(), Justification::centredLeft, 1, 0.8f);
+        auto s = segment (i);
+        if (i == selected)
+        {
+            g.setGradientFill (ColourGradient (Colour (0xff2f86e0), 0.0f, s.getY(), Colour (0xff15508f), 0.0f, s.getBottom(), false));
+            g.fillRoundedRectangle (s.reduced (1.0f), r - 1.0f);
+        }
+        g.setColour (i == selected || i == hoverIndex ? Colours::white : Colour (0xffb9bec3));
+        g.drawText (String::fromUTF8 (labels[i]), s, Justification::centred);
     }
+    g.setColour (Colour (0xffb9bec3).withAlpha (0.6f));
+    g.drawRoundedRectangle (b, r, 1.0f);
+}
+
+void MonitorSelector::mouseDown (const MouseEvent& e)
+{
+    const int i = indexAt (e.position);
+    if (i >= 0 && i != selected)
+        attachment.setValueAsCompleteGesture ((float) i);
+}
+
+void MonitorSelector::mouseMove (const MouseEvent& e)
+{
+    const int i = indexAt (e.position);
+    if (i != hoverIndex) { hoverIndex = i; repaint(); }
 }

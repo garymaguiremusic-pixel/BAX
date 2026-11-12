@@ -48,16 +48,14 @@ public:
     /** Settings as the DSP sees them (view / stereo link resolved). Message or audio thread. */
     bax::EngineSettings readSettings() const;
 
-    /** True when channel B follows channel A (Classic views, or Stereo link on). */
-    bool isLinked() const;
     bax::View getView() const;
+    bool isLinkOn() const;
+
+    juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     /** Sample rate for the editor's response display. */
     std::atomic<double> displaySampleRate { 48000.0 };
-    std::atomic<int> editorWidth { 0 };   // remembered editor size (0 = default)
-
-    /** Output peak per channel (linear, decaying), for the editor meters. */
-    std::atomic<float> outputPeak[2] {};
+    std::atomic<float> editorScale { 1.0f };   // remembered editor size (1 = 100 %)
 
 private:
     template <typename Sample>
@@ -77,6 +75,9 @@ private:
     std::atomic<float>* pLink = nullptr;
     std::atomic<float>* pOversampling = nullptr;
     std::atomic<float>* pView = nullptr;
+    std::atomic<float>* pMonitor = nullptr;
+    std::atomic<float>* pBypass = nullptr;
+    juce::AudioProcessorParameter* bypassParam = nullptr;
 
     std::atomic<int> currentProgram { 0 };
 

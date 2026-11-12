@@ -16,12 +16,13 @@ constexpr int kNumDetents = 8;
 /** Exact comparison (used to detect "value changed"), without -Wfloat-equal noise. */
 inline bool sameValue (double a, double b) noexcept { return ! (a < b) && ! (b < a); }
 
-// 0 = Off
-constexpr double kHpFreqs[kNumDetents] = { 0.0, 12.0, 18.0, 24.0, 36.0, 48.0, 72.0, 120.0 };
-constexpr double kLsFreqs[kNumDetents] = { 40.0, 75.0, 105.0, 150.0, 230.0, 300.0, 450.0, 600.0 };
-constexpr double kHsFreqs[kNumDetents] = { 1500.0, 2400.0, 3500.0, 5000.0, 7000.0, 10000.0, 14000.0, 20000.0 };
-// 0 = Off, then the corner moves down
-constexpr double kLpFreqs[kNumDetents] = { 0.0, 70000.0, 50000.0, 35000.0, 24000.0, 18000.0, 12000.0, 6500.0 };
+// Detent values in host-value order (clockwise), as printed on the reference panel.
+// 0 = Out (off)
+constexpr double kHpFreqs[kNumDetents] = { 0.0, 12.0, 18.0, 24.0, 30.0, 36.0, 43.0, 54.0 };
+constexpr double kLsFreqs[kNumDetents] = { 74.0, 84.0, 98.0, 116.0, 131.0, 166.0, 230.0, 361.0 };
+constexpr double kHsFreqs[kNumDetents] = { 18000.0, 7100.0, 4800.0, 3400.0, 2500.0, 2100.0, 1800.0, 1600.0 };
+// 0 = Out (off), then the corner moves down
+constexpr double kLpFreqs[kNumDetents] = { 0.0, 70000.0, 28000.0, 18000.0, 12600.0, 11100.0, 9000.0, 7500.0 };
 
 constexpr double kGainRangeDb   = 5.0;    // shelves: -5 .. +5 dB
 constexpr double kOutputRangeDb = 10.0;   // output:  -10 .. +10 dB
@@ -53,6 +54,9 @@ struct ChannelSettings
 
 enum class Oversampling { x1 = 0, x2 = 1, x4 = 2 };
 
+/** Listening mode at the very end of the chain. Delta = output minus the (latency-aligned) input. */
+enum class Monitor { LR = 0, Mid = 1, Side = 2, Delta = 3 };
+
 struct EngineSettings
 {
     ChannelSettings a, b;
@@ -60,6 +64,8 @@ struct EngineSettings
     bool midSide = false;
     Oversampling oversampling = Oversampling::x1;
     double outputDb = 0.0;
+    bool bypass = false;           // global true bypass (200 ms crossfade)
+    Monitor monitor = Monitor::LR;
 };
 
 } // namespace bax
