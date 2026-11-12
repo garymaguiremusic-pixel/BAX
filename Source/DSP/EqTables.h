@@ -20,7 +20,7 @@ inline bool sameValue (double a, double b) noexcept { return ! (a < b) && ! (b <
 // 0 = Out (off)
 constexpr double kHpFreqs[kNumDetents] = { 0.0, 12.0, 18.0, 24.0, 30.0, 36.0, 43.0, 54.0 };
 constexpr double kLsFreqs[kNumDetents] = { 74.0, 84.0, 98.0, 116.0, 131.0, 166.0, 230.0, 361.0 };
-constexpr double kHsFreqs[kNumDetents] = { 18000.0, 7100.0, 4800.0, 3400.0, 2500.0, 2100.0, 1800.0, 1600.0 };
+constexpr double kHsFreqs[kNumDetents] = { 1600.0, 1800.0, 2100.0, 2500.0, 3400.0, 4800.0, 7100.0, 18000.0 };
 // 0 = Out (off), then the corner moves down
 constexpr double kLpFreqs[kNumDetents] = { 0.0, 70000.0, 28000.0, 18000.0, 12600.0, 11100.0, 9000.0, 7500.0 };
 

@@ -35,7 +35,7 @@ Every push to `main` builds the plugin on Windows, runs all the tests, and publi
 | **SHELF** (low shelf frequency) | 74, 84, 98, 116, 131, 166, 230, 361 Hz |
 | **LOW FREQUENCY** LEFT / RIGHT level | -5 .. +5 dB |
 | **HIGH FREQUENCY** LEFT / RIGHT level | -5 .. +5 dB |
-| **SHELF** (high shelf frequency) | 18, 7.1, 4.8, 3.4, 2.5, 2.1, 1.8, 1.6 kHz (the label sits about an octave below the shoulder) |
+| **SHELF** (high shelf frequency) | 1.6, 1.8, 2.1, 2.5, 3.4, 4.8, 7.1, 18 kHz (the label sits about an octave below the shoulder) |
 | **CUT** (12 dB/oct high cut) | Out, 70, 28, 18, 12.6, 11.1, 9, 7.5 kHz |
 | **ENGAGE** | true bypass with a 200 ms crossfade |
 

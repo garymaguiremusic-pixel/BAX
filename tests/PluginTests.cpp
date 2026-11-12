@@ -54,7 +54,7 @@ static void testParameters (BaxAudioProcessor& p)
     std::printf ("      HP detents: %s\n", row.toRawUTF8());
     check (hp->getText (0.0f, 32) == "Out" && hp->getText (1.0f, 32) == "54 Hz", "HP detent labels");
     check (p.apvts.getParameter (bax::ParamIDs::lsFreqL)->getText (0.5f, 32) == "131 Hz", "LS default shows 131 Hz");
-    check (p.apvts.getParameter (bax::ParamIDs::hsFreqL)->getText (1.0f / 7.0f, 32) == "7.1 kHz", "HS detent 1 shows 7.1 kHz");
+    check (p.apvts.getParameter (bax::ParamIDs::hsFreqL)->getText (6.0f / 7.0f, 32) == "7.1 kHz", "HS detent 6 shows 7.1 kHz");
     check (p.apvts.getParameter (bax::ParamIDs::lsGainL)->getText (0.75f, 32) == "+2.5 dB", "gain text +2.5 dB");
     check (std::abs (p.apvts.getParameter (bax::ParamIDs::lpL)->getValueForText ("18 kHz") - 3.0f / 7.0f) < 1.0e-6f, "LP text -> value");
 }
