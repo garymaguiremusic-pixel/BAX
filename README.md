@@ -1,8 +1,9 @@
 # BAXR
 
 A stereo Baxandall-style mastering EQ plugin (VST3, Windows x64) built with JUCE 8. The GUI is
-laid out as rack units in the style of a hardware Baxandall EQ, and drawn with the Virus Delay
-look: brushed metal, chrome and black knobs, blue accents. The window is resizable, keeps its
+laid out as rack units in the style of a hardware Baxandall EQ, and uses the same black / orange
+theme as LeadVerb: brushed black metal, chrome and black knobs, light-grey labels and orange as
+the only accent. Everything is drawn in code (no image assets). The window is resizable, keeps its
 aspect ratio and remembers its size. There is no licensing, copy protection or demo mode.
 
 ![Classic Exp view](docs/screenshot.png)

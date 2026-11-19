@@ -46,9 +46,9 @@ void BaxKnob::paint (Graphics& g)
         const auto font = CustomLookAndFeel::uiFont (11.0f, true);
         const float w = std::min (bubble.getWidth(), GlyphArrangement::getStringWidth (font, text) + 12.0f);
         auto pill = bubble.withSizeKeepingCentre (w, (float) kBubbleHeight - 1.0f);
-        g.setColour (Colour (0xf0101418));
+        g.setColour (BaxColours::tooltipBackground);
         g.fillRoundedRectangle (pill, 3.0f);
-        g.setColour (BaxColours::blue.withAlpha (0.7f));
+        g.setColour (BaxColours::accent.withAlpha (0.7f));
         g.drawRoundedRectangle (pill.reduced (0.5f), 3.0f, 1.0f);
         g.setFont (font);
         g.setColour (Colours::white);
@@ -198,18 +198,18 @@ void LedButton::paintButton (Graphics& g, bool isHighlighted, bool isDown)
     const float d = std::min (b.getWidth(), b.getHeight()) - 4.0f;
     const auto bezel = Rectangle<float> (d, d).withCentre (b.getCentre());
 
-    // chrome bezel
+    // neutral chrome bezel
     Path ring;
     ring.addEllipse (bezel);
     DropShadow (Colours::black.withAlpha (0.7f), 6, { 0, 2 }).drawForPath (g, ring);
-    g.setGradientFill (ColourGradient (Colour (0xffe7eaed), bezel.getX(), bezel.getY(),
-                                       Colour (0xff5d646b), bezel.getRight(), bezel.getBottom(), false));
+    g.setGradientFill (ColourGradient (BaxColours::lightGrey, bezel.getX(), bezel.getY(),
+                                       Colour (0xff4a4a4e), bezel.getRight(), bezel.getBottom(), false));
     g.fillEllipse (bezel);
 
     // black cap
     const auto cap = bezel.reduced (d * 0.12f);
-    g.setGradientFill (ColourGradient (isHighlighted ? Colour (0xff3a3f45) : Colour (0xff2c3035), cap.getCentreX(), cap.getY(),
-                                       Colour (0xff0d0f11), cap.getCentreX(), cap.getBottom(), false));
+    g.setGradientFill (ColourGradient ((isHighlighted ? Colour (0xff2c2c2f).brighter (0.12f) : Colour (0xff2c2c2f)), cap.getCentreX(), cap.getY(),
+                                       Colour (0xff0d0d0e), cap.getCentreX(), cap.getBottom(), false));
     g.fillEllipse (isDown ? cap.reduced (0.6f) : cap);
     g.setColour (Colours::black);
     g.drawEllipse (cap, 0.8f);
@@ -218,15 +218,15 @@ void LedButton::paintButton (Graphics& g, bool isHighlighted, bool isDown)
     const auto led = cap.withSizeKeepingCentre (d * 0.38f, d * 0.38f);
     if (getToggleState())
     {
-        g.setColour (BaxColours::blueGlow.withAlpha (0.35f));
+        g.setColour (BaxColours::accentGlow.withAlpha (0.35f));
         g.fillEllipse (led.expanded (d * 0.12f));
-        g.setGradientFill (ColourGradient (Colour (0xffd8eeff), led.getCentreX(), led.getY(),
-                                           BaxColours::blue, led.getCentreX(), led.getBottom(), false));
+        g.setGradientFill (ColourGradient (BaxColours::accentLight, led.getCentreX(), led.getY(),
+                                           BaxColours::accent, led.getCentreX(), led.getBottom(), false));
     }
     else
     {
-        g.setGradientFill (ColourGradient (Colour (0xff2a3542), led.getCentreX(), led.getY(),
-                                           Colour (0xff10161d), led.getCentreX(), led.getBottom(), false));
+        g.setGradientFill (ColourGradient (Colour (0xff262628), led.getCentreX(), led.getY(),
+                                           Colour (0xff0c0c0d), led.getCentreX(), led.getBottom(), false));
     }
     g.fillEllipse (led);
     g.setColour (Colours::black.withAlpha (0.8f));
@@ -261,7 +261,7 @@ void MenuLabel::paint (Graphics& g)
 
     const float titleW = GlyphArrangement::getStringWidth (font, title);
     auto area = b;
-    g.setColour (hover ? Colours::white : Colour (0xffdfe3e6));
+    g.setColour (hover ? Colours::white : BaxColours::buttonText);
     g.drawText (title, area.removeFromLeft (titleW + 2.0f), Justification::centredLeft);
 
     // arrow
@@ -273,7 +273,7 @@ void MenuLabel::paint (Graphics& g)
 
     if (value.isNotEmpty())
     {
-        g.setColour (BaxColours::blue);
+        g.setColour (BaxColours::accent);
         g.drawFittedText (value.toUpperCase(), area.toNearestInt(), Justification::centredLeft, 1, 0.8f);
     }
 }
@@ -307,12 +307,12 @@ void PillToggle::paintButton (Graphics& g, bool isHighlighted, bool)
     const float r = b.getHeight() * 0.5f;
     if (getToggleState())
     {
-        g.setGradientFill (ColourGradient (Colour (0xff2f86e0), 0.0f, b.getY(), Colour (0xff15508f), 0.0f, b.getBottom(), false));
+        g.setGradientFill (ColourGradient (BaxColours::buttonOnTop, 0.0f, b.getY(), BaxColours::buttonOnBottom, 0.0f, b.getBottom(), false));
         g.fillRoundedRectangle (b, r);
     }
-    g.setColour (getToggleState() ? BaxColours::blue : Colour (0xffb9bec3).withAlpha (isHighlighted ? 1.0f : 0.75f));
+    g.setColour (getToggleState() ? BaxColours::accent : BaxColours::labelText.withAlpha (isHighlighted ? 1.0f : 0.75f));
     g.drawRoundedRectangle (b, r, 1.2f);
-    g.setColour (getToggleState() || isHighlighted ? Colours::white : Colour (0xffdfe3e6));
+    g.setColour (getToggleState() || isHighlighted ? Colours::white : BaxColours::buttonText);
     g.setFont (CustomLookAndFeel::uiFont (11.0f, true));
     g.drawText (getButtonText().toUpperCase(), b, Justification::centred);
 }
@@ -345,7 +345,7 @@ void MonitorSelector::paint (Graphics& g)
 {
     auto b = getLocalBounds().toFloat().reduced (1.0f);
     const float r = b.getHeight() * 0.5f;
-    g.setColour (Colour (0xff0b0c0e));
+    g.setColour (BaxColours::insetTop);
     g.fillRoundedRectangle (b, r);
 
     static const char* labels[] = { "LR", "M", "S", "\xce\x94" };
@@ -355,13 +355,13 @@ void MonitorSelector::paint (Graphics& g)
         auto s = segment (i);
         if (i == selected)
         {
-            g.setGradientFill (ColourGradient (Colour (0xff2f86e0), 0.0f, s.getY(), Colour (0xff15508f), 0.0f, s.getBottom(), false));
+            g.setGradientFill (ColourGradient (BaxColours::buttonOnTop, 0.0f, s.getY(), BaxColours::buttonOnBottom, 0.0f, s.getBottom(), false));
             g.fillRoundedRectangle (s.reduced (1.0f), r - 1.0f);
         }
-        g.setColour (i == selected || i == hoverIndex ? Colours::white : Colour (0xffb9bec3));
+        g.setColour (i == selected || i == hoverIndex ? Colours::white : BaxColours::labelText);
         g.drawText (String::fromUTF8 (labels[i]), s, Justification::centred);
     }
-    g.setColour (Colour (0xffb9bec3).withAlpha (0.6f));
+    g.setColour (BaxColours::labelText.withAlpha (0.6f));
     g.drawRoundedRectangle (b, r, 1.0f);
 }
 

@@ -399,9 +399,9 @@ static void drawScrew (Graphics& g, Point<float> c, float r)
 {
     g.setColour (Colours::black.withAlpha (0.6f));
     g.fillEllipse (Rectangle<float> (r * 2.0f + 2.0f, r * 2.0f + 2.0f).withCentre (c.translated (0.0f, 0.8f)));
-    g.setGradientFill (ColourGradient (Colour (0xffb4bac0), c.x - r, c.y - r, Colour (0xff41464c), c.x + r, c.y + r, false));
+    g.setGradientFill (ColourGradient (BaxColours::labelText, c.x - r, c.y - r, Colour (0xff434346), c.x + r, c.y + r, false));
     g.fillEllipse (Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (c));
-    g.setColour (Colour (0xff1a1d20));
+    g.setColour (Colour (0xff1a1a1c));
     g.drawLine (c.x - r * 0.6f, c.y - r * 0.6f, c.x + r * 0.6f, c.y + r * 0.6f, 1.2f);
     g.drawLine (c.x - r * 0.6f, c.y + r * 0.6f, c.x + r * 0.6f, c.y - r * 0.6f, 1.2f);
 }
@@ -410,8 +410,8 @@ void BaxPanel::drawRack (Graphics& g, float y) const
 {
     const auto rack = Rectangle<float> (0.0f, y, (float) kWidth, kRackH);
 
-    // rack frame with ears
-    g.setGradientFill (ColourGradient (Colour (0xff2f3236), 0.0f, rack.getY(), Colour (0xff17191b), 0.0f, rack.getBottom(), false));
+    // rack frame with ears: a dark header-grey gradient
+    g.setGradientFill (ColourGradient (BaxColours::headerBottom, 0.0f, rack.getY(), BaxColours::background, 0.0f, rack.getBottom(), false));
     g.fillRoundedRectangle (rack, 4.0f);
     g.setColour (Colours::white.withAlpha (0.14f));
     g.drawHorizontalLine ((int) rack.getY() + 1, 4.0f, rack.getRight() - 4.0f);
@@ -425,7 +425,7 @@ void BaxPanel::drawRack (Graphics& g, float y) const
         for (float sy : { y + 20.0f, y + kRackH - 20.0f })
         {
             auto slot = Rectangle<float> (18.0f, 10.0f).withCentre ({ left ? 18.0f : (float) kWidth - 18.0f, sy });
-            g.setColour (Colour (0xff050607));
+            g.setColour (BaxColours::insetTop);
             g.fillRoundedRectangle (slot, 5.0f);
             g.setColour (Colours::white.withAlpha (0.12f));
             g.drawRoundedRectangle (slot.translated (0.0f, 0.8f), 5.0f, 0.8f);
@@ -436,7 +436,7 @@ void BaxPanel::drawRack (Graphics& g, float y) const
             {
                 const float vx = earX + (left ? 36.0f : 12.0f) + (float) col * 13.0f;
                 auto vent = Rectangle<float> (vx, y + 24.0f + (float) row * 10.5f, 10.0f, 4.0f);
-                g.setColour (Colour (0xff060708));
+                g.setColour (BaxColours::insetTop);
                 g.fillRoundedRectangle (vent, 2.0f);
                 g.setColour (Colours::white.withAlpha (0.08f));
                 g.drawHorizontalLine ((int) vent.getBottom(), vent.getX() + 1.0f, vent.getRight() - 1.0f);
@@ -446,7 +446,7 @@ void BaxPanel::drawRack (Graphics& g, float y) const
     // faceplate
     auto face = Rectangle<float> (kFaceX, y + 6.0f, (float) kWidth - 2.0f * kFaceX, kRackH - 12.0f);
     DropShadow (Colours::black.withAlpha (0.6f), 8, { 0, 2 }).drawForRectangle (g, face.toNearestInt());
-    g.setGradientFill (ColourGradient (Colour (0xff2c2f33), 0.0f, face.getY(), Colour (0xff1c1e21), 0.0f, face.getBottom(), false));
+    g.setGradientFill (ColourGradient (BaxColours::panelTop, 0.0f, face.getY(), BaxColours::panelBottom, 0.0f, face.getBottom(), false));
     g.fillRoundedRectangle (face, 6.0f);
     g.setColour (Colours::white.withAlpha (0.16f));
     g.drawHorizontalLine ((int) face.getY() + 1, face.getX() + 6.0f, face.getRight() - 6.0f);
@@ -460,7 +460,7 @@ void BaxPanel::drawRack (Graphics& g, float y) const
 
 void BaxPanel::drawLogo (Graphics& g, Rectangle<float> area, const String& subtitle) const
 {
-    // stylised wordmark: chrome "baxr" over blue "eq", with a swoosh
+    // stylised wordmark: chrome "baxr" over orange "eq", with an orange swoosh
     GlyphArrangement main;
     main.addLineOfText (Font (FontOptions (30.0f, Font::bold | Font::italic)), "baxr", 0.0f, 0.0f);
     Path mainPath;
@@ -484,14 +484,14 @@ void BaxPanel::drawLogo (Graphics& g, Rectangle<float> area, const String& subti
     eq.createPath (eqPath);
     const auto eb = eqPath.getBounds();
     eqPath.applyTransform (AffineTransform::translation (area.getCentreX() - eb.getCentreX(), mb.getBottom() + 4.0f - eb.getY()));
-    g.setColour (BaxColours::blue);
+    g.setColour (BaxColours::accent);
     g.fillPath (eqPath);
 
     Path swoosh;
     const float sx = mb.getX(), sy = eqPath.getBounds().getBottom() + 5.0f, ex = mb.getRight();
     swoosh.startNewSubPath (sx, sy);
     swoosh.quadraticTo ((sx + ex) * 0.5f, sy + 4.0f, ex + 4.0f, sy - 3.0f);
-    g.setGradientFill (ColourGradient (BaxColours::blue.withAlpha (0.0f), sx, sy, BaxColours::blue, ex, sy, false));
+    g.setGradientFill (ColourGradient (BaxColours::accent.withAlpha (0.0f), sx, sy, BaxColours::accent, ex, sy, false));
     g.strokePath (swoosh, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
 
     if (subtitle.isNotEmpty())
@@ -504,13 +504,15 @@ void BaxPanel::drawLogo (Graphics& g, Rectangle<float> area, const String& subti
 
 void BaxPanel::paint (Graphics& g)
 {
-    g.fillAll (Colour (0xff0c0d0e));
+    // window background
+    g.setGradientFill (ColourGradient (Colour (0xff1a1a1c), 0.0f, 0.0f, Colour (0xff070708), 0.0f, (float) getHeight(), false));
+    g.fillAll();
 
     // --- top bar --------------------------------------------------------------------
     auto bar = Rectangle<float> (0.0f, 0.0f, (float) kWidth, kTopBarH);
-    g.setGradientFill (ColourGradient (Colour (0xff1d1f22), 0.0f, 0.0f, Colour (0xff08090a), 0.0f, bar.getBottom(), false));
+    g.setGradientFill (ColourGradient (Colour (0xff222224), 0.0f, 0.0f, Colour (0xff111112), 0.0f, bar.getBottom(), false));
     g.fillRect (bar);
-    g.setColour (Colours::white.withAlpha (0.1f));
+    g.setColour (BaxColours::bevelDark);
     g.drawHorizontalLine ((int) bar.getBottom() - 1, 0.0f, (float) kWidth);
 
     // --- racks ----------------------------------------------------------------------
@@ -532,7 +534,7 @@ void BaxPanel::paint (Graphics& g)
             const auto box = Rectangle<float> (34.0f, 12.0f).withCentre ({ x, y });
             g.setColour (Colours::black.withAlpha (0.5f));
             g.drawText (s.labels[i], box.translated (0.0f, 1.0f), Justification::centred);
-            g.setColour (s.labels[i] == "OUT" ? BaxColours::blue : Colour (0xffd2d6da));
+            g.setColour (s.labels[i] == "OUT" ? BaxColours::accent : BaxColours::lightGrey);
             g.drawText (s.labels[i], box, Justification::centred);
         }
 
@@ -542,7 +544,7 @@ void BaxPanel::paint (Graphics& g)
         g.setFont (CustomLookAndFeel::uiFont (10.5f, true));
         g.setColour (Colours::black.withAlpha (0.5f));
         g.drawText (c.text, c.area.translated (0.0f, 1.0f), Justification::centred);
-        g.setColour (c.accent ? BaxColours::blue : BaxColours::labelText);
+        g.setColour (c.accent ? BaxColours::accent : BaxColours::labelText);
         g.drawText (c.text, c.area, Justification::centred);
     }
 }

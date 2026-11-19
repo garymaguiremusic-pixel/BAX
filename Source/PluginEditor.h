@@ -61,7 +61,7 @@ private:
     {
         juce::String text;
         juce::Rectangle<float> area;
-        bool accent = false;            // blue heading
+        bool accent = false;            // orange heading
     };
 
     void timerCallback() override;
